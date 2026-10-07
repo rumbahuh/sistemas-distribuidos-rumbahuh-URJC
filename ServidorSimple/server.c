@@ -11,6 +11,13 @@
 
 int sigint = 1;
 
+enum {
+	MAX_LINE_LEN = 512,
+	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
+	MAX_FAILS = 255,
+	DEFAULT_EXIT_CODE = 255
+};
+
 // Manejador de la señal SIGINT (Control+C)
 void handle_sigint(int sig) {
 	// subrutina de interrupcion
@@ -26,6 +33,9 @@ int main(void) {
     char buffer[BUFFER_SIZE] = {0};
     const char *reply = "adios";
     int opt = 1;
+
+    // Debe leer de la entrada estandar
+    FILE *input = stdin;
 
 	// Registramos el sigint
 	signal(SIGINT, handle_sigint);
@@ -68,17 +78,21 @@ int main(void) {
             exit(EXIT_FAILURE);
     }
 
-	while(1) {
+	while(sigint) {
 		// fgets
+        char line[BUF_SIZE];
+
+        while (fgets(line, BUF_SIZE, input) != NULL) {
+            printf("Leído: %s", line);
+        }
+
+        if (!feof(input)) {
+		    fprintf(stderr, "error reading input\n");
+		    return DEFAULT_EXIT_CODE;
+	    }
+
 		// send
 		// recv
-
-		// Receive message
-		ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-		if (bytes_read > 0) {
-			buffer[bytes_read] = '\0';
-			printf("Received: %s\n", buffer);
-		}
 
 		// Send reply
 		write(client_fd, reply, strlen(reply));
