@@ -3,9 +3,21 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
+#include <signal.h>
 
 #define PORT 8090
 #define BUFFER_SIZE 1024
+
+int sigint = 1;
+
+// Manejador de la señal SIGINT (Control+C)
+void handle_sigint(int sig) {
+	// subrutina de interrupcion
+	// bloquea el while
+	// asi que gastamos minimo tiempo usando el flag
+    sigint = 0;
+}
 
 int main(void) {
     int server_fd, client_fd;
@@ -14,6 +26,9 @@ int main(void) {
     char buffer[BUFFER_SIZE] = {0};
     const char *reply = "adios";
     int opt = 1;
+
+	// Registramos el sigint
+	signal(SIGINT, handle_sigint);
 
     // Create socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -45,28 +60,40 @@ int main(void) {
 
     printf("Server listening on 127.0.0.1:%d...\n", PORT);
 
-    // Accept connection
+    // Accept conection
     client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
     if (client_fd < 0) {
-        perror("accept failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
+			perror("accept failed");
+            close(server_fd);
+            exit(EXIT_FAILURE);
     }
 
-    // Receive message
-    ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
-    if (bytes_read > 0) {
-        buffer[bytes_read] = '\0';
-        printf("Received: %s\n", buffer);
-    }
+	while(1) {
+		// fgets
+		// send
+		// recv
 
-    // Send reply
-    write(client_fd, reply, strlen(reply));
-    printf("Sent: %s\n", reply);
+		// Receive message
+		ssize_t bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+		if (bytes_read > 0) {
+			buffer[bytes_read] = '\0';
+			printf("Received: %s\n", buffer);
+		}
 
-    // Close sockets
-    close(client_fd);
-    close(server_fd);
+		// Send reply
+		write(client_fd, reply, strlen(reply));
+		printf("Sent: %s\n", reply);
 
-    return 0;
+		// Close sockets
+		close(client_fd);
+
+		if (!sigint) {
+			printf("\nClosing cleanly...\n");
+			if (server_fd >= 0) {
+				close(server_fd);
+			} // no libera buffer?
+
+			exit(EXIT_SUCCESS);
+		}
+	}
 }
