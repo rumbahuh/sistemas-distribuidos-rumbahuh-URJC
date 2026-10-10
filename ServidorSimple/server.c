@@ -31,7 +31,7 @@ int main(void) {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
-    const char *reply = "adios";
+    const char *reply = "Received";
     int opt = 1;
 
     // Debe leer de la entrada estandar
@@ -91,12 +91,10 @@ int main(void) {
 		    return DEFAULT_EXIT_CODE;
 	    }
 
-		// send
-		// recv
-
-		// Send reply
+        // Send reply
 		write(client_fd, reply, strlen(reply));
 		printf("Sent: %s\n", reply);
+		// recv
 
 		// Close sockets
 		close(client_fd);
