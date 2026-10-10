@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 #define PORT 8090
 #define BUFFER_SIZE 1024
@@ -41,7 +42,7 @@ void handle_sigint(int sig) {
 void flush_stdin(void)
 {
     int c;
-    while ((c = getchar()) != 'n' && c != EOF);
+    while ((c = getchar()) != '\n' && c != EOF);
 }
 
 int main(void) {
@@ -51,7 +52,7 @@ int main(void) {
     char buffer[BUFFER_SIZE] = {0};
     const char *reply = "Received";
     int opt = 1;
-    
+
     // Debe leer de la entrada estandar
     FILE *input = stdin;
 
@@ -103,8 +104,10 @@ int main(void) {
 	while(sigint) {
         char line[BUF_SIZE];
         
+        int bytes_disponibles = 0;
+        ioctl(STDIN_FILENO, FIONREAD, &bytes_disponibles);
         // Limpiamos la entrada
-        flush_stdin();
+        if (bytes_disponibles > 0) flush_stdin();
 
         // Especificación de indicación de lectura
         printf(">");

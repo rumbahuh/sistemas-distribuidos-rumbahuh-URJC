@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 #define PORT 8090
 #define BUFFER_SIZE 1024
@@ -87,11 +88,14 @@ int main(void) {
         exit(EXIT_FAILURE);
     }
 
+    return 0;
     while(sigint) {
         char line[BUF_SIZE];
 
+        int bytes_disponibles = 0;
+        ioctl(STDIN_FILENO, FIONREAD, &bytes_disponibles);
         // Limpiamos la entrada
-        flush_stdin();
+        if (bytes_disponibles > 0) flush_stdin();
 
         // Especificación de indicación de lectura
         printf(">");
