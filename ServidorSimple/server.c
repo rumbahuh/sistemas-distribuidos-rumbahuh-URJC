@@ -18,12 +18,30 @@ enum {
 	DEFAULT_EXIT_CODE = 255
 };
 
-// Manejador de la señal SIGINT (Control+C)
+/*
+ * Manejador de la señal SIGINT (Control+C)
+ *
+ * Se trata de una subrutina de interrupcion
+ * que bloquea el while asi que gastamos un 
+ * mínimo tiempo usando el flag signint.
+ */
 void handle_sigint(int sig) {
-	// subrutina de interrupcion
-	// bloquea el while
-	// asi que gastamos minimo tiempo usando el flag
+    // Evito un warning
+    (void)sig;
+
+    // Seteo la flag
     sigint = 0;
+}
+
+/*
+ * En C, fflush(stdin) está indefinido por lo que
+ * tuve que crear esta función para descartar caracteres
+ * y simular la limpieza del buffer de lectura de stdin.
+ */
+void flush_stdin(void)
+{
+    int c;
+    while ((c = getchar()) != 'n' && c != EOF);
 }
 
 int main(void) {
@@ -33,9 +51,13 @@ int main(void) {
     char buffer[BUFFER_SIZE] = {0};
     const char *reply = "Received";
     int opt = 1;
-
+    
     // Debe leer de la entrada estandar
     FILE *input = stdin;
+
+    // Evito los warnings por ahora
+    (void)buffer;
+    (void)reply;
 
 	// Registramos el sigint
 	signal(SIGINT, handle_sigint);
@@ -79,8 +101,13 @@ int main(void) {
     }
 
 	while(sigint) {
-		// fgets
         char line[BUF_SIZE];
+        
+        // Limpiamos la entrada
+        flush_stdin();
+
+        // Especificación de indicación de lectura
+        printf(">");
 
         while (fgets(line, BUF_SIZE, input) != NULL) {
             printf("Leído: %s", line);
@@ -88,12 +115,13 @@ int main(void) {
 
         if (!feof(input)) {
 		    fprintf(stderr, "error reading input\n");
-		    return DEFAULT_EXIT_CODE;
+		    
+            return DEFAULT_EXIT_CODE;
 	    }
 
         // Send reply
-		write(client_fd, reply, strlen(reply));
-		printf("Sent: %s\n", reply);
+		//write(client_fd, reply, strlen(reply));
+		//printf("Sent: %s\n", reply);
 		// recv
 
 		// Close sockets
