@@ -35,17 +35,6 @@ void handle_sigint(int sig) {
     sigint = 0;
 }
 
-/*
- * En C, fflush(stdin) está indefinido por lo que
- * tuve que crear esta función para descartar caracteres
- * y simular la limpieza del buffer de lectura de stdin.
- */
-void flush_stdin(void)
-{
-    int c;
-    while ((c = getchar()) != '\n' && c != EOF);
-}
-
 int main(void) {
     // El cliente no escucha ni acepta nada,
     // por lo que solo necesita un solo socket
@@ -74,6 +63,8 @@ int main(void) {
         exit(EXIT_FAILURE);
     }
 
+    printf("Socket successfully created...\n");
+
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
@@ -97,6 +88,7 @@ int main(void) {
         close(sock);
         exit(EXIT_SUCCESS);
     }
+    printf("connected to the server...\n");
 
     while(sigint) {
         char line[BUF_SIZE];
@@ -135,15 +127,10 @@ int main(void) {
             break;
         }
 
-		// recv
-        int n = recv(sock, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
+		// recv (bloqueante: espera la respuesta del servidor)
+        int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
         if (n < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // No hay nada que leer: volvemos a mostrar el prompt
-                continue;
-            }
-
-            // EINTR = Control+C mientras recibía, salimos por el while
+            // EINTR = Control+C mientras esperaba, salimos por el while
             if (errno != EINTR) {
                 perror("recv failed");
             }

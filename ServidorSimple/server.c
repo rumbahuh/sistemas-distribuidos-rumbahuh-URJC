@@ -35,17 +35,6 @@ void handle_sigint(int sig) {
     sigint = 0;
 }
 
-/*
- * En C, fflush(stdin) está indefinido por lo que
- * tuve que crear esta función para descartar caracteres
- * y simular la limpieza del buffer de lectura de stdin.
- */
-void flush_stdin(void)
-{
-    int c;
-    while ((c = getchar()) != '\n' && c != EOF);
-}
-
 int main(void) {
     int server_fd, client_fd;
     struct sockaddr_in address;
@@ -74,6 +63,8 @@ int main(void) {
         exit(EXIT_FAILURE);
     }
 
+    printf("Socket successfully created...\n");
+
     // Reuse address and port
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -88,6 +79,7 @@ int main(void) {
         close(server_fd);
         exit(EXIT_FAILURE);
     }
+    printf("Socket successfully binded...\n");
 
     // Listen for incoming connections
     if (listen(server_fd, 1) < 0) {
@@ -95,8 +87,6 @@ int main(void) {
         close(server_fd);
         exit(EXIT_FAILURE);
     }
-
-    printf("Server listening on 127.0.0.1:%d...\n", PORT);
 
     // Accept conection
     client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
@@ -114,6 +104,27 @@ int main(void) {
 
 	while(sigint) {
         char line[BUF_SIZE];
+
+		// recv (bloqueante: espera hasta que el cliente escriba)
+        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+        if (r < 0) {
+            // EINTR = Control+C mientras esperaba, salimos por el while
+            if (errno != EINTR) {
+                perror("recv failed");
+            }
+
+            break;
+        }
+
+        if (r == 0) {
+            // El cliente cerró la conexión
+            printf("\nClient disconnected\n");
+
+            break;
+        }
+
+        buffer[r] = '\0';
+        printf("+++ %s", buffer);
 
         // Especificación de indicación de lectura
         printf(">");
@@ -149,32 +160,6 @@ int main(void) {
 
             break;
         }
-
-		// recv
-        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
-        if (r < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // No hay nada que leer: volvemos a mostrar el prompt
-                continue;
-            }
-
-            // EINTR = Control+C mientras recibía, salimos por el while
-            if (errno != EINTR) {
-                perror("recv failed");
-            }
-
-            break;
-        }
-
-        if (r == 0) {
-            // El cliente cerró la conexión
-            printf("\nClient disconnected\n");
-
-            break;
-        }
-
-        buffer[r] = '\0';
-        printf("+++ %s", buffer);
 	}
 
     // Close sockets (fuera del bucle, para cerrarlos una sola vez)
