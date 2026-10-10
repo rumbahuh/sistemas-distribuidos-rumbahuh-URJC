@@ -1,16 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <signal.h>
-#include <sys/ioctl.h>
 
 #define PORT 8090
 #define BUFFER_SIZE 1024
 
-int sigint = 1;
+// volatile sig_atomic_t: el compilador no puede cachearla en un registro
+volatile sig_atomic_t sigint = 1;
 
 enum {
 	MAX_LINE_LEN = 512,
@@ -61,7 +62,15 @@ int main(void) {
     (void)reply;
 
 	// Registramos el sigint
-	signal(SIGINT, handle_sigint);
+	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
+	// (fgets/read, accept) devuelven error con errno == EINTR
+	// en vez de reiniciarse como hace signal() en glibc.
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_sigint;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sigaction(SIGINT, &sa, NULL);
 
     // Create socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -73,6 +82,7 @@ int main(void) {
     // Reuse address and port
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = inet_addr("127.0.0.1");
     address.sin_port = htons(PORT);
@@ -96,47 +106,63 @@ int main(void) {
     // Accept conection
     client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
     if (client_fd < 0) {
-			perror("accept failed");
+            // EINTR = Control+C mientras esperaba conexión, no es un error real
+            if (errno != EINTR) {
+			    perror("accept failed");
+                close(server_fd);
+                exit(EXIT_FAILURE);
+            }
+            printf("\nClosing cleanly...\n");
             close(server_fd);
-            exit(EXIT_FAILURE);
+            exit(EXIT_SUCCESS);
     }
 
 	while(sigint) {
         char line[BUF_SIZE];
-        
-        int bytes_disponibles = 0;
-        ioctl(STDIN_FILENO, FIONREAD, &bytes_disponibles);
-        // Limpiamos la entrada
-        if (bytes_disponibles > 0) flush_stdin();
 
         // Especificación de indicación de lectura
         printf(">");
+        // Sin \n el prompt se queda en el buffer de stdout
+        fflush(stdout);
 
-        while (fgets(line, BUF_SIZE, input) != NULL) {
-            printf("Leído: %s", line);
+        // Una sola lectura por vuelta, para poder volver a mirar sigint
+        if (fgets(line, BUF_SIZE, input) == NULL) {
+            if (!sigint) {
+                // Control+C: fgets devolvió NULL por EINTR, salimos por el while
+                break;
+            }
+
+            if (feof(input)) {
+                // Control+D: fin de entrada, salimos en vez de repetir el prompt
+                printf("\n");
+                break;
+            }
+
+            fprintf(stderr, "error reading input\n");
+            close(client_fd);
+            close(server_fd);
+            return DEFAULT_EXIT_CODE;
         }
 
-        if (!feof(input)) {
-		    fprintf(stderr, "error reading input\n");
-		    
-            return DEFAULT_EXIT_CODE;
-	    }
+        // Solo imprimimos line si fgets NO devolvió NULL
+        printf("Leído: %s", line);
 
         // Send reply
 		//write(client_fd, reply, strlen(reply));
 		//printf("Sent: %s\n", reply);
 		// recv
-
-		// Close sockets
-		close(client_fd);
-
-		if (!sigint) {
-			printf("\nClosing cleanly...\n");
-			if (server_fd >= 0) {
-				close(server_fd);
-			} // no libera buffer?
-
-			exit(EXIT_SUCCESS);
-		}
 	}
+
+    // Close sockets (fuera del bucle, para cerrarlos una sola vez)
+    close(client_fd);
+
+    if (!sigint) {
+        printf("\nClosing cleanly...\n");
+    }
+
+    if (server_fd >= 0) {
+        close(server_fd);
+    } // no libera buffer?
+
+    exit(EXIT_SUCCESS);
 }
