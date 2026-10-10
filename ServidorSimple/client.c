@@ -47,20 +47,14 @@ void flush_stdin(void)
 }
 
 int main(void) {
-    int server_fd, client_fd;
+    // El cliente no escucha ni acepta nada,
+    // por lo que solo necesita un solo socket
     int sock;
     struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE] = {0};
-    const char *msg = "Received"; // not sure
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
-
-    // Evito los warnings por ahora
-    (void)buffer;
-    (void)msg;
-    (void)server_fd;
-    (void)client_fd;
 
 	// Registramos el sigint
 	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
@@ -130,19 +124,42 @@ int main(void) {
             return DEFAULT_EXIT_CODE;
         }
 
-        // Solo imprimimos line si fgets NO devolvió NULL
-        printf("Leído: %s", line);
-
         // Send message
-        //write(sock, msg, strlen(msg));
-        //printf("Sent: %s\n", msg);
+        int r = send(sock, line, strlen(line), 0);
+        if (r < 0) {
+            // EINTR = Control+C mientras enviaba, salimos por el while
+            if (errno != EINTR) {
+                perror("send failed");
+            }
+
+            break;
+        }
+
 		// recv
-        // Read reply
-        //ssize_t bytes_read = read(sock, buffer, sizeof(buffer) - 1);
-        //if (bytes_read > 0) {
-        //    buffer[bytes_read] = '\0';
-        //    printf("Received: %s\n", buffer);
-        //}
+        int n = recv(sock, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No hay nada que leer: volvemos a mostrar el prompt
+                continue;
+            }
+
+            // EINTR = Control+C mientras recibía, salimos por el while
+            if (errno != EINTR) {
+                perror("recv failed");
+            }
+
+            break;
+        }
+
+        if (n == 0) {
+            // El servidor cerró la conexión
+            printf("\nServer disconnected\n");
+
+            break;
+        }
+
+        buffer[n] = '\0';
+        printf("+++ %s", buffer);
 	}
 
     // Close socket (fuera del bucle, para cerrarlo una sola vez)

@@ -51,15 +51,10 @@ int main(void) {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
-    const char *reply = "Received";
     int opt = 1;
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
-
-    // Evito los warnings por ahora
-    (void)buffer;
-    (void)reply;
 
 	// Registramos el sigint
 	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
@@ -144,13 +139,42 @@ int main(void) {
             return DEFAULT_EXIT_CODE;
         }
 
-        // Solo imprimimos line si fgets NO devolvió NULL
-        printf("Leído: %s", line);
-
         // Send reply
-		//write(client_fd, reply, strlen(reply));
-		//printf("Sent: %s\n", reply);
+        int s = send(client_fd, line, strlen(line), 0);
+        if (s < 0) {
+            // EINTR = Control+C mientras enviaba, salimos por el while
+            if (errno != EINTR) {
+                perror("send failed");
+            }
+
+            break;
+        }
+
 		// recv
+        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
+        if (r < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No hay nada que leer: volvemos a mostrar el prompt
+                continue;
+            }
+
+            // EINTR = Control+C mientras recibía, salimos por el while
+            if (errno != EINTR) {
+                perror("recv failed");
+            }
+
+            break;
+        }
+
+        if (r == 0) {
+            // El cliente cerró la conexión
+            printf("\nClient disconnected\n");
+
+            break;
+        }
+
+        buffer[r] = '\0';
+        printf("+++ %s", buffer);
 	}
 
     // Close sockets (fuera del bucle, para cerrarlos una sola vez)
