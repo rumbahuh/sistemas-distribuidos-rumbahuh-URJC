@@ -18,7 +18,8 @@ enum {
 	MAX_FAILS = 255,
 	DEFAULT_EXIT_CODE = 255,
     MIN_PORT = 1024,
-    MAX_PORT = 65535
+    MAX_PORT = 65535,
+    BACKLOG = 128
 };
 
 /*
@@ -123,89 +124,93 @@ int main(int argc, char * argv[]) {
     printf("Socket successfully binded...\n");
 
     // Listen for incoming connections
-    if (listen(server_fd, 1) < 0) {
+    if (listen(server_fd, BACKLOG) < 0) {
         perror("listen failed");
         close(server_fd);
         exit(EXIT_FAILURE);
     }
     printf("Server listening...\n");
 
-    // Accept conection
-    client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
-    if (client_fd < 0) {
+	while(sigint) {
+        // Para no sobreescribir, reiniciamos addrlen
+        addrlen = sizeof(address);
+
+        // Accept conections
+        client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+        if (client_fd < 0) {
             // EINTR = Control+C mientras esperaba conexión, no es un error real
             if (errno != EINTR) {
-			    perror("accept failed");
+                perror("accept failed");
                 close(server_fd);
                 exit(EXIT_FAILURE);
             }
-            printf("\nClosing cleanly...\n");
-            close(server_fd);
-            exit(EXIT_SUCCESS);
-    }
 
-	while(sigint) {
-        char line[BUF_SIZE];
+            continue;
+        }
 
-        // Especificación de indicación de lectura
-        printf(">");
-        // Sin \n el prompt se queda en el buffer de stdout
-        fflush(stdout);
+        printf("Client connected...\n");
 
-        // Una sola lectura por vuelta, para poder volver a mirar sigint
-        if (fgets(line, BUF_SIZE, input) == NULL) {
-            if (!sigint) {
-                // Control+C: fgets devolvió NULL por EINTR, salimos por el while
+        while(sigint) {
+            char line[BUF_SIZE];
+
+            // recv (bloqueante)
+            int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+            if (r < 0) {
+                // EINTR = Control+C mientras recibía, salimos por el while
+                if (errno != EINTR) {
+                    perror("recv failed");
+                }
+
                 break;
             }
 
-            if (feof(input)) {
-                // Control+D: fin de entrada, salimos en vez de repetir el prompt
-                printf("\n");
+            if (r == 0) {
+                // El cliente cerró la conexión
+                printf("\nClient disconnected\n");
+
                 break;
             }
 
-            fprintf(stderr, "error reading input\n");
-            close(client_fd);
-            close(server_fd);
-            return DEFAULT_EXIT_CODE;
-        }
+            buffer[r] = '\0';
+            printf("+++ %s", buffer);
 
-        // Send reply
-        int s = send(client_fd, line, strlen(line), 0);
-        if (s < 0) {
-            // EINTR = Control+C mientras enviaba, salimos por el while
-            if (errno != EINTR) {
-                perror("send failed");
+            // Especificación de indicación de lectura
+            printf(">");
+            // Sin \n el prompt se queda en el buffer de stdout
+            fflush(stdout);
+
+            // Una sola lectura por vuelta, para poder volver a mirar sigint
+            if (fgets(line, BUF_SIZE, input) == NULL) {
+                if (!sigint) {
+                    // Control+C: fgets devolvió NULL por EINTR, salimos por el while
+                    break;
+                }
+
+                if (feof(input)) {
+                    // Control+D: fin de entrada, salimos en vez de repetir el prompt
+                    printf("\n");
+                    break;
+                }
+
+                fprintf(stderr, "error reading input\n");
+                break; // Especificacion: solo termina con CTRL+C, asi que
+            }          // no return y añado un break.
+
+            // Send reply
+            int s = send(client_fd, line, strlen(line), 0);
+            if (s < 0) {
+                // EINTR = Control+C mientras enviaba, salimos por el while
+                if (errno != EINTR) {
+                    perror("send failed");
+                }
+
+                break;
             }
-
-            break;
         }
 
-		// recv (no bloqueante)
-        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
-        if (r < 0) {
-            // EINTR = Control+C mientras recibía, salimos por el while
-            if (errno != EINTR) {
-                perror("recv failed");
-            }
-
-            break;
-        }
-
-        if (r == 0) {
-            // El cliente cerró la conexión
-            printf("\nClient disconnected\n");
-
-            break;
-        }
-
-        buffer[r] = '\0';
-        printf("+++ %s", buffer);
+        // Cierro cliente y vuelvo a accept
+        close(client_fd);
 	}
-
-    // Close sockets (fuera del bucle, para cerrarlos una sola vez)
-    close(client_fd);
 
     if (!sigint) {
         printf("\nClosing cleanly...\n");
