@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <signal.h>
 
+
 #define BUFFER_SIZE 1024
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
@@ -66,24 +67,30 @@ int main(int argc, char * argv[]) {
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
-    int opt = 1;
+    int enable = 1;
     long port; // [1024, 65535]
+    int opt;
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
 
 	struct sigaction sa;
 
-    argc--;
-    argv++;
-
-    // Nuenva specificación
-    if (argc != 1) {
+    // No se aceptan opciones: si getopt encuentra alguna, es un error
+    while ((opt = getopt(argc, argv, "")) != -1) {
         fprintf(stderr, "Usage: ./server [port_number]\n");
         exit(EXIT_FAILURE);
     }
 
-    port = parse_number(argv[0], MIN_PORT, MAX_PORT);
+    // Los argumentos se entienden diferentemente
+    // usando optind en lugar de argv++ y argc--.
+    // Empieza en optind, así que restamos
+    if (argc - optind != 1) {
+        fprintf(stderr, "Usage: ./server [port_number]\n");
+        exit(EXIT_FAILURE);
+    }
+
+    port = parse_number(argv[optind], MIN_PORT, MAX_PORT);
     if (port < 0) {
         fprintf(stderr, "Invalid port [1024, 65535]\n");
         exit(EXIT_FAILURE);
@@ -108,7 +115,11 @@ int main(int argc, char * argv[]) {
     printf("Socket successfully created...\n");
 
     // Reuse address and port
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    } // Añado comprobación de error a la primitiva
 
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;

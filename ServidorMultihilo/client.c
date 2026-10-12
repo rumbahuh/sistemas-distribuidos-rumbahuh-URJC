@@ -70,28 +70,30 @@ int main(int argc, char * argv[]) {
     char buffer[BUFFER_SIZE] = {0};
     long port; // [1024, 65535]
     long client_id; // [1, MAX_ID]
+    int opt;
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
 
 	struct sigaction sa;
 
-    argc--;
-    argv++;
-
-    // Nuenva specificación
-    if (argc != 3) {
+    while ((opt = getopt(argc, argv, "")) != -1) {
         fprintf(stderr, "Usage: ./client [client_id] [ip] [port_number]\n");
         exit(EXIT_FAILURE);
     }
 
-    client_id = parse_number(argv[0], MIN_ID, MAX_ID);
+    if (argc - optind != 3) {
+        fprintf(stderr, "Usage: ./client [client_id] [ip] [port_number]\n");
+        exit(EXIT_FAILURE);
+    }
+
+    client_id = parse_number(argv[optind], MIN_ID, MAX_ID);
     if (client_id < 0) {
         fprintf(stderr, "Invalid client_id x > 0\n");
         exit(EXIT_FAILURE);
     }
 
-    port = parse_number(argv[2], MIN_PORT, MAX_PORT);
+    port = parse_number(argv[optind + 2], MIN_PORT, MAX_PORT);
     if (port < 0) {
         fprintf(stderr, "Invalid port [1024, 65535]\n");
         exit(EXIT_FAILURE);
@@ -112,8 +114,8 @@ int main(int argc, char * argv[]) {
     serv_addr.sin_port = htons(port);
 
     // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
-        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
+    if (inet_pton(AF_INET, argv[optind + 1], &serv_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", argv[optind + 1]);
         exit(EXIT_FAILURE);
     }
 
