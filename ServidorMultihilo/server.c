@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include <pthread.h>
 
 
 #define BUFFER_SIZE 1024
@@ -62,6 +63,18 @@ long parse_number(const char *text, long min, long max)
     return value;
 }
 
+void * thread_client(void *arg)
+{
+    int client_fd = *(int *)arg; // Hago un cast
+    free(arg); // Libero la copia de memoria dinámica
+
+    // Whatever thread'll do
+
+    close(client_fd);
+
+    return NULL;
+}
+
 int main(int argc, char * argv[]) {
     int server_fd, client_fd;
     struct sockaddr_in address;
@@ -75,6 +88,9 @@ int main(int argc, char * argv[]) {
     FILE *input = stdin;
 
 	struct sigaction sa;
+
+    // Sin buffering, obligatorio en prácticas
+    setbuf(stdout, NULL);
 
     // No se aceptan opciones: si getopt encuentra alguna, es un error
     while ((opt = getopt(argc, argv, "")) != -1) {
@@ -158,6 +174,9 @@ int main(int argc, char * argv[]) {
 
             continue;
         }
+        
+        pthread_t thread;
+        pthread_create(&thread, NULL, &thread_client, &client_fd);
 
         printf("Client connected...\n");
 

@@ -77,6 +77,9 @@ int main(int argc, char * argv[]) {
 
 	struct sigaction sa;
 
+    // Sin buffering, obligatorio en prácticas
+    setbuf(stdout, NULL);
+    
     while ((opt = getopt(argc, argv, "")) != -1) {
         fprintf(stderr, "Usage: ./client [client_id] [ip] [port_number]\n");
         exit(EXIT_FAILURE);
