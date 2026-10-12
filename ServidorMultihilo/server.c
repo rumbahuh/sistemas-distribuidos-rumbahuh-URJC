@@ -183,13 +183,8 @@ int main(int argc, char * argv[]) {
         }
 
 		// recv (no bloqueante)
-        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
+        int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
         if (r < 0) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // No hay nada que leer: volvemos a mostrar el prompt
-                continue;
-            }
-
             // EINTR = Control+C mientras recibía, salimos por el while
             if (errno != EINTR) {
                 perror("recv failed");

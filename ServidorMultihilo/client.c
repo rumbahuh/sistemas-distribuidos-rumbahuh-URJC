@@ -107,6 +107,16 @@ int main(int argc, char * argv[]) {
 	sa.sa_flags = 0;
 	sigaction(SIGINT, &sa, NULL);
 
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+
+    // Convert IPv4 address from text to binary form
+    if (inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
+        exit(EXIT_FAILURE);
+    }
+
     // Create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -115,17 +125,6 @@ int main(int argc, char * argv[]) {
     }
 
     printf("Socket successfully created...\n");
-
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
-
-    // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
-        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
-        close(sock);
-        exit(EXIT_FAILURE);
-    }
 
     // Connect to server
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
