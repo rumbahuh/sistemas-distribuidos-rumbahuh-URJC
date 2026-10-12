@@ -7,21 +7,23 @@
 #include <sys/socket.h>
 #include <signal.h>
 #include <pthread.h>
-
+#include <time.h>
 
 #define BUFFER_SIZE 1024
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
 volatile sig_atomic_t sigint = 1;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+int active_threads = 0;   // hilos atendiendo clientes ahora mismo
 
 enum {
-	MAX_LINE_LEN = 512,
-	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
 	MAX_FAILS = 255,
 	DEFAULT_EXIT_CODE = 255,
     MIN_PORT = 1024,
     MAX_PORT = 65535,
-    BACKLOG = 128
+    BACKLOG = 128,
+    MAX_THREADS = 100,
+    POLL_US = 10000 // 10 ms entre comprobaciones cuando está lleno
 };
 
 /*
@@ -63,14 +65,76 @@ long parse_number(const char *text, long min, long max)
     return value;
 }
 
+/*
+ * Espera hasta que haya hueco para un hilo más y lo reserva.
+ * Devuelve 0 si se pulsó Control+C mientras esperaba.
+ */
+int wait_for_slot(void)
+{
+    while (sigint) {
+        pthread_mutex_lock(&mutex);
+        if (active_threads < MAX_THREADS) {
+            active_threads++;
+            pthread_mutex_unlock(&mutex);
+
+            return 1;
+        }
+        pthread_mutex_unlock(&mutex);
+
+        usleep(POLL_US);
+    }
+
+    return 0;
+}
+
+// Libera un hueco
+void release_slot(void)
+{
+    pthread_mutex_lock(&mutex);
+    active_threads--;
+    pthread_mutex_unlock(&mutex);
+}
+
+/*
+ * Función que ejecuta cada hilo: atiende a un único cliente.
+ * Recibe una copia en memoria dinámica del client_fd.
+ */
 void * thread_client(void *arg)
 {
     int client_fd = *(int *)arg; // Hago un cast
+    char buffer[BUFFER_SIZE] = {0}; // Local al hilo, no se comparte
+    const char *reply = "Hello client!";
+    unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)client_fd;
+    int r;
+
     free(arg); // Libero la copia de memoria dinámica
 
-    // Whatever thread'll do
+    // recv (bloqueante: este hilo solo atiende a un cliente)
+    r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+    if (r < 0) {
+        perror("recv failed");
+        goto end;
+    }
 
+    if (r == 0) {
+        // El cliente cerró la conexión sin enviar nada
+        goto end;
+    }
+
+    buffer[r] = '\0';
+    printf("+++ %s\n", buffer);
+
+    // Espera aleatoria entre 0.5 y 2 segundos (en microsegundos)
+    usleep(500000 + rand_r(&seed) % 1500001);
+
+    // Send reply
+    if (send(client_fd, reply, strlen(reply), 0) < 0) {
+        perror("send failed");
+    }
+
+end:
     close(client_fd);
+    release_slot();
 
     return NULL;
 }
@@ -79,13 +143,9 @@ int main(int argc, char * argv[]) {
     int server_fd, client_fd;
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE] = {0};
     int enable = 1;
     long port; // [1024, 65535]
     int opt;
-
-    // Debe leer de la entrada estandar
-    FILE *input = stdin;
 
 	struct sigaction sa;
 
@@ -159,8 +219,17 @@ int main(int argc, char * argv[]) {
     printf("Server listening...\n");
 
 	while(sigint) {
+        pthread_t thread;
+        int *client_fd_copia;
+        int err;
+
         // Para no sobreescribir, reiniciamos addrlen
         addrlen = sizeof(address);
+
+        // Si hay 100 hilos activos no aceptamos más: esperan en la cola del kernel
+        if (!wait_for_slot()) {
+            break;
+        }
 
         // Accept conections
         client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
@@ -174,72 +243,30 @@ int main(int argc, char * argv[]) {
 
             continue;
         }
-        
-        pthread_t thread;
-        pthread_create(&thread, NULL, &thread_client, &client_fd);
+
+        // Cada hilo recibe su propia copia del descriptor
+        client_fd_copia = malloc(sizeof(int));
+        if (client_fd_copia == NULL) {
+            perror("malloc failed");
+            close(client_fd);
+            
+            continue;
+        }
+        *client_fd_copia = client_fd;
+
+        err = pthread_create(&thread, NULL, thread_client, client_fd_copia);
+        if (err != 0) {
+            fprintf(stderr, "pthread_create failed: %s\n", strerror(err));
+            free(client_fd_copia);
+            close(client_fd);
+
+            continue;
+        } // Especificación de errores de primitivas
+
+        // No permito join, para que cada hilo libre recursos al terminar
+        pthread_detach(thread);
 
         printf("Client connected...\n");
-
-        while(sigint) {
-            char line[BUF_SIZE];
-
-            // recv (bloqueante)
-            int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
-            if (r < 0) {
-                // EINTR = Control+C mientras recibía, salimos por el while
-                if (errno != EINTR) {
-                    perror("recv failed");
-                }
-
-                break;
-            }
-
-            if (r == 0) {
-                // El cliente cerró la conexión
-                printf("\nClient disconnected\n");
-
-                break;
-            }
-
-            buffer[r] = '\0';
-            printf("+++ %s", buffer);
-
-            // Especificación de indicación de lectura
-            printf(">");
-            // Sin \n el prompt se queda en el buffer de stdout
-            fflush(stdout);
-
-            // Una sola lectura por vuelta, para poder volver a mirar sigint
-            if (fgets(line, BUF_SIZE, input) == NULL) {
-                if (!sigint) {
-                    // Control+C: fgets devolvió NULL por EINTR, salimos por el while
-                    break;
-                }
-
-                if (feof(input)) {
-                    // Control+D: fin de entrada, salimos en vez de repetir el prompt
-                    printf("\n");
-                    break;
-                }
-
-                fprintf(stderr, "error reading input\n");
-                break; // Especificacion: solo termina con CTRL+C, asi que
-            }          // no return y añado un break.
-
-            // Send reply
-            int s = send(client_fd, line, strlen(line), 0);
-            if (s < 0) {
-                // EINTR = Control+C mientras enviaba, salimos por el while
-                if (errno != EINTR) {
-                    perror("send failed");
-                }
-
-                break;
-            }
-        }
-
-        // Cierro cliente y vuelvo a accept
-        close(client_fd);
 	}
 
     if (!sigint) {

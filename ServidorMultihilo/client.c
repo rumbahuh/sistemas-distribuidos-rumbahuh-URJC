@@ -13,10 +13,6 @@
 volatile sig_atomic_t sigint = 1;
 
 enum {
-	MAX_LINE_LEN = 512,
-	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
-	MAX_FAILS = 255,
-	DEFAULT_EXIT_CODE = 255,
     MIN_ID = 1,
     MAX_ID = 1000000,
     MIN_PORT = 1024,
@@ -72,9 +68,6 @@ int main(int argc, char * argv[]) {
     long client_id; // [1, MAX_ID]
     int opt;
 
-    // Debe leer de la entrada estandar
-    FILE *input = stdin;
-
 	struct sigaction sa;
 
     // Sin buffering, obligatorio en prácticas
@@ -104,7 +97,7 @@ int main(int argc, char * argv[]) {
 
     // Registramos el sigint
 	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (fgets/read, connect) devuelven error con errno == EINTR
+	// (connect) devuelven error con errno == EINTR
 	// en vez de reiniciarse como hace signal() en glibc.
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = handle_sigint;
@@ -145,71 +138,40 @@ int main(int argc, char * argv[]) {
     }
     printf("connected to the server...\n");
 
-    while(sigint) {
-        char line[BUF_SIZE];
+        // Mensaje del enunciado: "Hello server! From client: <id>"
+    snprintf(buffer, BUFFER_SIZE, "Hello server! From client: %ld", client_id);
 
-        // Especificación de indicación de lectura
-        printf(">");
-        // Sin \n el prompt se queda en el buffer de stdout
-        fflush(stdout);
-
-        // Una sola lectura por vuelta, para poder volver a mirar sigint
-        if (fgets(line, BUF_SIZE, input) == NULL) {
-            if (!sigint) {
-                // Control+C: fgets devolvió NULL por EINTR, salimos por el while
-                break;
-            }
-
-            if (feof(input)) {
-                // Control+D: fin de entrada, salimos en vez de repetir el prompt
-                printf("\n");
-                break;
-            }
-
-            fprintf(stderr, "error reading input\n");
-            close(sock);
-            return DEFAULT_EXIT_CODE;
-        }
-
-        // Send message
-        int r = send(sock, line, strlen(line), 0);
-        if (r < 0) {
-            // EINTR = Control+C mientras enviaba, salimos por el while
-            if (errno != EINTR) {
-                perror("send failed");
-            }
-
-            break;
-        }
-
-		// recv (bloqueante: espera la respuesta del servidor)
-        int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-        if (n < 0) {
-            // EINTR = Control+C mientras esperaba, salimos por el while
-            if (errno != EINTR) {
-                perror("recv failed");
-            }
-
-            break;
-        }
-
-        if (n == 0) {
-            // El servidor cerró la conexión
-            printf("\nServer disconnected\n");
-
-            break;
-        }
-
-        buffer[n] = '\0';
-        printf("+++ %s", buffer);
-	}
-
-    // Close socket (fuera del bucle, para cerrarlo una sola vez)
-    close(sock); // ROBERTO DICE QUE ESTO NO VA AQUI
-
-    if (!sigint) {
-        printf("\nClosing cleanly...\n");
+    // Send message
+    if (send(sock, buffer, strlen(buffer), 0) < 0) {
+        perror("send failed");
+        close(sock);
+        exit(EXIT_FAILURE);
     }
+
+    // recv (bloqueante: espera la respuesta del servidor)
+    int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+    if (n < 0) {
+        // EINTR = Control+C mientras esperaba, no es un error real
+        if (errno != EINTR) {
+            perror("recv failed");
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+        
+        close(sock);
+        exit(EXIT_SUCCESS);
+    }
+
+    if (n == 0) {
+        // El servidor cerró la conexión sin responder
+        printf("\nServer disconnected\n");
+    } else {
+        buffer[n] = '\0';
+        printf("+++ %s\n", buffer);
+    }
+
+    // Close socket
+    close(sock);
 
     exit(EXIT_SUCCESS);
 }
