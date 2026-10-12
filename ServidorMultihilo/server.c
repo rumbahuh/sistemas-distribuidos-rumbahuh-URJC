@@ -11,10 +11,12 @@
 
 #define BUFFER_SIZE 1024
 
-// volatile sig_atomic_t: el compilador no puede cachearla en un registro
 volatile sig_atomic_t sigint = 1;
+
+// Para no sufrir de condiciones de carrera
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-int active_threads = 0;   // hilos atendiendo clientes ahora mismo
+// hilos atendiendo clientes ahora mismo
+int active_threads = 0;
 
 enum {
 	MAX_FAILS = 255,
@@ -23,7 +25,7 @@ enum {
     MAX_PORT = 65535,
     BACKLOG = 128,
     MAX_THREADS = 100,
-    POLL_US = 10000 // 10 ms entre comprobaciones cuando está lleno
+    POLL_US = 10000 // 10ms entre comprobaciones cuando está lleno
 };
 
 /*
@@ -53,7 +55,7 @@ long parse_number(const char *text, long min, long max)
     errno = 0;
     value = strtol(text, &end, 10);
 
-    // end == text: no había dígitos. *end != '\0': basura al final ("12abc")
+    // Si no hay digitos o hay basura al final
     if (errno != 0 || end == text || *end != '\0') {
         return -1;
     }
@@ -67,18 +69,20 @@ long parse_number(const char *text, long min, long max)
 
 /*
  * Espera hasta que haya hueco para un hilo más y lo reserva.
- * Devuelve 0 si se pulsó Control+C mientras esperaba.
+ * Devuelve 0 si se hizo Control+C mientras ocurre la espera
  */
 int wait_for_slot(void)
 {
     while (sigint) {
         pthread_mutex_lock(&mutex);
+
         if (active_threads < MAX_THREADS) {
             active_threads++;
             pthread_mutex_unlock(&mutex);
 
             return 1;
         }
+
         pthread_mutex_unlock(&mutex);
 
         usleep(POLL_US);
@@ -259,6 +263,7 @@ int main(int argc, char * argv[]) {
             fprintf(stderr, "pthread_create failed: %s\n", strerror(err));
             free(client_fd_copia);
             close(client_fd);
+            release_slot(); // porque wait_for_slot() incrementó active_threads
 
             continue;
         } // Especificación de errores de primitivas
