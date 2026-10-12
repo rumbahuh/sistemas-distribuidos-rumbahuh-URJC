@@ -7,7 +7,6 @@
 #include <sys/socket.h>
 #include <signal.h>
 
-#define PORT 8090
 #define BUFFER_SIZE 1024
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
@@ -17,7 +16,11 @@ enum {
 	MAX_LINE_LEN = 512,
 	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
 	MAX_FAILS = 255,
-	DEFAULT_EXIT_CODE = 255
+	DEFAULT_EXIT_CODE = 255,
+    MIN_ID = 1,
+    MAX_ID = 1000000,
+    MIN_PORT = 1024,
+    MAX_PORT = 65535
 };
 
 /*
@@ -35,12 +38,38 @@ void handle_sigint(int sig) {
     sigint = 0;
 }
 
+/*
+ * Convierte texto a número en el rango [min, max]. 
+ * Devuelve -1 si no es válido.
+ */
+long parse_number(const char *text, long min, long max)
+{
+    char *end;
+    long value;
+
+    errno = 0;
+    value = strtol(text, &end, 10);
+
+    // end == text: no había dígitos. *end != '\0': basura al final ("12abc")
+    if (errno != 0 || end == text || *end != '\0') {
+        return -1;
+    }
+
+    if (value < min || value > max) {
+        return -1;
+    }
+
+    return value;
+}
+
 int main(int argc, char * argv[]) {
     // El cliente no escucha ni acepta nada,
     // por lo que solo necesita un solo socket
     int sock;
     struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE] = {0};
+    long port; // [1024, 65535]
+    long client_id; // [1, MAX_ID]
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
@@ -53,6 +82,18 @@ int main(int argc, char * argv[]) {
     // Nuenva specificación
     if (argc != 3) {
         fprintf(stderr, "Usage: ./client [client_id] [ip] [port_number]\n");
+        exit(EXIT_FAILURE);
+    }
+
+    client_id = parse_number(argv[0], MIN_ID, MAX_ID);
+    if (client_id < 0) {
+        fprintf(stderr, "Invalid client_id x > 0\n");
+        exit(EXIT_FAILURE);
+    }
+
+    port = parse_number(argv[2], MIN_PORT, MAX_PORT);
+    if (port < 0) {
+        fprintf(stderr, "Invalid port [1024, 65535]\n");
         exit(EXIT_FAILURE);
     }
 
@@ -77,11 +118,11 @@ int main(int argc, char * argv[]) {
 
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PORT);
+    serv_addr.sin_port = htons(port);
 
     // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        perror("invalid address");
+    if (inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
         close(sock);
         exit(EXIT_FAILURE);
     }

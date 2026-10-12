@@ -7,7 +7,6 @@
 #include <sys/socket.h>
 #include <signal.h>
 
-#define PORT 8090
 #define BUFFER_SIZE 1024
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
@@ -17,7 +16,9 @@ enum {
 	MAX_LINE_LEN = 512,
 	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
 	MAX_FAILS = 255,
-	DEFAULT_EXIT_CODE = 255
+	DEFAULT_EXIT_CODE = 255,
+    MIN_PORT = 1024,
+    MAX_PORT = 65535
 };
 
 /*
@@ -35,12 +36,37 @@ void handle_sigint(int sig) {
     sigint = 0;
 }
 
+/*
+ * Convierte texto a número en el rango [min, max]. 
+ * Devuelve -1 si no es válido.
+ */
+long parse_number(const char *text, long min, long max)
+{
+    char *end;
+    long value;
+
+    errno = 0;
+    value = strtol(text, &end, 10);
+
+    // end == text: no había dígitos. *end != '\0': basura al final ("12abc")
+    if (errno != 0 || end == text || *end != '\0') {
+        return -1;
+    }
+
+    if (value < min || value > max) {
+        return -1;
+    }
+
+    return value;
+}
+
 int main(int argc, char * argv[]) {
     int server_fd, client_fd;
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
     int opt = 1;
+    long port; // [1024, 65535]
 
     // Debe leer de la entrada estandar
     FILE *input = stdin;
@@ -53,6 +79,12 @@ int main(int argc, char * argv[]) {
     // Nuenva specificación
     if (argc != 1) {
         fprintf(stderr, "Usage: ./server [port_number]\n");
+        exit(EXIT_FAILURE);
+    }
+
+    port = parse_number(argv[0], MIN_PORT, MAX_PORT);
+    if (port < 0) {
+        fprintf(stderr, "Invalid port [1024, 65535]\n");
         exit(EXIT_FAILURE);
     }
 
@@ -79,8 +111,8 @@ int main(int argc, char * argv[]) {
 
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = inet_addr("127.0.0.1");
-    address.sin_port = htons(PORT);
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(port);
 
     // Bind socket
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
