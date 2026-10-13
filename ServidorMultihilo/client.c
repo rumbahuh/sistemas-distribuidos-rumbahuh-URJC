@@ -58,17 +58,61 @@ long parse_number(const char *text, long min, long max)
     return value;
 }
 
+/*
+ * Crea el socket y conecta con el servidor.
+ * Devuelve el descriptor del socket o -1 si ocurre un error.
+ */
+int connect_to_server(const char *ip, long port)
+{
+    int sock;
+    struct sockaddr_in serv_addr;
+
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+
+    // Convert IPv4 address from text to binary form
+    if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", ip);
+        return -1;
+    }
+
+    // Create socket
+    sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        perror("socket creation failed");
+        return -1;
+    }
+
+    printf("Socket successfully created...\n");
+
+    // Connect to server
+    if (connect(sock, (struct sockaddr *)&serv_addr,
+                sizeof(serv_addr)) < 0) {
+        // EINTR = Control+C mientras se conectaba, no es un error real
+        if (errno != EINTR) {
+            perror("connection failed");
+        }
+
+        close(sock);
+        return -1;
+    }
+
+    printf("connected to the server...\n");
+
+    return sock;
+}
+
 int main(int argc, char * argv[]) {
     // El cliente no escucha ni acepta nada,
     // por lo que solo necesita un solo socket
     int sock;
-    struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE] = {0};
     long port; // [1024, 65535]
     long client_id; // [1, MAX_ID]
     int opt;
-
-	struct sigaction sa;
+    int n;
+    struct sigaction sa;
 
     // Sin buffering, obligatorio en prácticas
     setbuf(stdout, NULL);
@@ -85,7 +129,7 @@ int main(int argc, char * argv[]) {
 
     client_id = parse_number(argv[optind], MIN_ID, MAX_ID);
     if (client_id < 0) {
-        fprintf(stderr, "Invalid client_id x > 0\n");
+        fprintf(stderr, "Invalid client_id [1, 1000000]\n");
         exit(EXIT_FAILURE);
     }
 
@@ -96,50 +140,32 @@ int main(int argc, char * argv[]) {
     }
 
     // Registramos el sigint
-	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (connect) devuelven error con errno == EINTR
-	// en vez de reiniciarse como hace signal() en glibc.
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = handle_sigint;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sigaction(SIGINT, &sa, NULL);
+    // Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
+    // (connect) devuelven error con errno == EINTR
+    // en vez de reiniciarse como hace signal() en glibc.
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
 
-    memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
-
-    // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, argv[optind + 1], &serv_addr.sin_addr) <= 0) {
-        fprintf(stderr, "Invalid IP address: %s\n", argv[optind + 1]);
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        perror("sigaction failed");
         exit(EXIT_FAILURE);
     }
 
-    // Create socket
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    sock = connect_to_server(argv[optind + 1], port);
     if (sock < 0) {
-        perror("socket creation failed");
+        if (!sigint) {
+            printf("\nClosing cleanly...\n");
+            exit(EXIT_SUCCESS);
+        }
+
         exit(EXIT_FAILURE);
     }
 
-    printf("Socket successfully created...\n");
-
-    // Connect to server
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        // EINTR = Control+C mientras se conectaba, no es un error real
-        if (errno != EINTR) {
-            perror("connection failed");
-            close(sock);
-            exit(EXIT_FAILURE);
-        }
-        printf("\nClosing cleanly...\n");
-        close(sock);
-        exit(EXIT_SUCCESS);
-    }
-    printf("connected to the server...\n");
-
-        // Mensaje del enunciado: "Hello server! From client: <id>"
-    snprintf(buffer, BUFFER_SIZE, "Hello server! From client: %ld", client_id);
+    // Mensaje del enunciado: "Hello server! From client: <id>"
+    snprintf(buffer, BUFFER_SIZE,
+             "Hello server! From client: %ld", client_id);
 
     // Send message
     if (send(sock, buffer, strlen(buffer), 0) < 0) {
@@ -149,7 +175,7 @@ int main(int argc, char * argv[]) {
     }
 
     // recv (bloqueante: espera la respuesta del servidor)
-    int n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+    n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
     if (n < 0) {
         // EINTR = Control+C mientras esperaba, no es un error real
         if (errno != EINTR) {
@@ -157,7 +183,7 @@ int main(int argc, char * argv[]) {
             close(sock);
             exit(EXIT_FAILURE);
         }
-        
+
         close(sock);
         exit(EXIT_SUCCESS);
     }

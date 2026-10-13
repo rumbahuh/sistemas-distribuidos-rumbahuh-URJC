@@ -19,8 +19,6 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int active_threads = 0;
 
 enum {
-	MAX_FAILS = 255,
-	DEFAULT_EXIT_CODE = 255,
     MIN_PORT = 1024,
     MAX_PORT = 65535,
     BACKLOG = 128,
@@ -65,6 +63,57 @@ long parse_number(const char *text, long min, long max)
     }
 
     return value;
+}
+
+/*
+ * Crea y configura el socket del servidor.
+ * Devuelve el descriptor del socket o -1 si ocurre un error.
+ */
+int create_server_socket(long port)
+{
+    int server_fd;
+    int enable = 1;
+    struct sockaddr_in address;
+
+    // Create socket
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        perror("socket creation failed");
+        return -1;
+    }
+    printf("Socket successfully created...\n");
+
+    // Reuse address and port
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR,
+                   &enable, sizeof(enable)) < 0) {
+        perror("setsockopt(SO_REUSEADDR) failed");
+        close(server_fd);
+        return -1;
+    } // Añado comprobación de error a la primitiva
+
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_ANY);
+    address.sin_port = htons(port);
+
+    // Bind socket
+    if (bind(server_fd, (struct sockaddr *)&address,
+             sizeof(address)) < 0) {
+        perror("bind failed");
+        close(server_fd);
+        return -1;
+    }
+    printf("Socket successfully binded...\n");
+
+    // Listen for incoming connections
+    if (listen(server_fd, BACKLOG) < 0) {
+        perror("listen failed");
+        close(server_fd);
+        return -1;
+    }
+    printf("Server listening...\n");
+
+    return server_fd;
 }
 
 /*
@@ -147,11 +196,10 @@ int main(int argc, char * argv[]) {
     int server_fd, client_fd;
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
-    int enable = 1;
     long port; // [1024, 65535]
     int opt;
 
-	struct sigaction sa;
+    struct sigaction sa;
 
     // Sin buffering, obligatorio en prácticas
     setbuf(stdout, NULL);
@@ -177,52 +225,25 @@ int main(int argc, char * argv[]) {
     }
 
     // Registramos el sigint
-	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (fgets/read, accept) devuelven error con errno == EINTR
-	// en vez de reiniciarse como hace signal() en glibc.
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = handle_sigint;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	sigaction(SIGINT, &sa, NULL);
+    // Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
+    // (fgets/read, accept) devuelven error con errno == EINTR
+    // en vez de reiniciarse como hace signal() en glibc.
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        perror("sigaction failed");
+        exit(EXIT_FAILURE);
+    }
 
-    // Create socket
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    // Create and configure server socket
+    server_fd = create_server_socket(port);
     if (server_fd < 0) {
-        perror("socket creation failed");
         exit(EXIT_FAILURE);
     }
-    printf("Socket successfully created...\n");
 
-    // Reuse address and port
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(enable)) < 0) {
-        perror("setsockopt(SO_REUSEADDR) failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    } // Añado comprobación de error a la primitiva
-
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_ANY);
-    address.sin_port = htons(port);
-
-    // Bind socket
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("bind failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-    printf("Socket successfully binded...\n");
-
-    // Listen for incoming connections
-    if (listen(server_fd, BACKLOG) < 0) {
-        perror("listen failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
-    printf("Server listening...\n");
-
-	while(sigint) {
+    while (sigint) {
         pthread_t thread;
         int *client_fd_copia;
         int err;
@@ -238,6 +259,8 @@ int main(int argc, char * argv[]) {
         // Accept conections
         client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
         if (client_fd < 0) {
+            release_slot(); // No usaremos el hueco reservado para su thread
+
             // EINTR = Control+C mientras esperaba conexión, no es un error real
             if (errno != EINTR) {
                 perror("accept failed");
@@ -253,7 +276,8 @@ int main(int argc, char * argv[]) {
         if (client_fd_copia == NULL) {
             perror("malloc failed");
             close(client_fd);
-            
+            release_slot();
+
             continue;
         }
         *client_fd_copia = client_fd;
@@ -269,10 +293,13 @@ int main(int argc, char * argv[]) {
         } // Especificación de errores de primitivas
 
         // No permito join, para que cada hilo libre recursos al terminar
-        pthread_detach(thread);
+        err = pthread_detach(thread);
+        if (err != 0) {
+            fprintf(stderr, "pthread_detach failed: %s\n", strerror(err));
+        }
 
         printf("Client connected...\n");
-	}
+    }
 
     if (!sigint) {
         printf("\nClosing cleanly...\n");
