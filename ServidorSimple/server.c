@@ -16,7 +16,6 @@ volatile sig_atomic_t sigint = 1;
 enum {
 	MAX_LINE_LEN = 512,
 	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
-	MAX_FAILS = 255,
 	DEFAULT_EXIT_CODE = 255
 };
 
@@ -44,7 +43,7 @@ main(void)
 	struct sockaddr_in address;
 	socklen_t addrlen = sizeof(address);
 	char buffer[BUFFER_SIZE] = { 0 };
-	int opt = 1;
+	int enable = 1;
 
 	// Debe leer de la entrada estandar
 	FILE *input = stdin;
@@ -71,7 +70,8 @@ main(void)
 	printf("Socket successfully created...\n");
 
 	// Reuse address and port
-	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable,
+		   sizeof(enable));
 
 	memset(&address, 0, sizeof(address));
 	address.sin_family = AF_INET;
@@ -92,6 +92,9 @@ main(void)
 		close(server_fd);
 		exit(EXIT_FAILURE);
 	}
+
+	printf("Server listening...\n");
+
 	// Accept conection
 	client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
 	if (client_fd < 0) {
@@ -176,7 +179,7 @@ main(void)
 
 	if (server_fd >= 0) {
 		close(server_fd);
-	}			// no libera buffer?
+	}
 
 	exit(EXIT_SUCCESS);
 }
