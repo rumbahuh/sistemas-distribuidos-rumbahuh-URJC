@@ -1,0 +1,31 @@
+rumbahuh@f-l2102-pc09:~/Escritorio/DISTRIBUIDOS/sistemas-distribuidos-rumbahuh-URJC/ServidorMultihilo$ ~rocapal/checker/SDC/check-sdc-p1.sh
+=========================================
+    Corrector SDC-P1 - v.260930          
+=========================================
+[OK] Ficheros fuente ./server.c y ./client.c encontrados.
+[OK] Ejecutables ./server y ./client encontrados.
+[*] Analizando código fuente...
+[OK] Reuso de puerto (SO_REUSEADDR) detectado.
+[OK] Desactivación del buffer de stdout (setbuf) detectada.
+[OK] Llamada a usleep() detectada.
+
+[*] Iniciando pruebas de carga...
+-----------------------------------------
+[>>] Lanzando prueba con 300 clientes (Puerto: 13771)
+  Tiempo total         : 4.92 s
+  Clientes atendidos   : 300 / 300
+  Max hilos servidor   : 101
+[OK] Prueba de 300 superada.
+-----------------------------------------
+[>>] Lanzando prueba con 500 clientes (Puerto: 19784)
+  Tiempo total         : 7.33 s
+  Clientes atendidos   : 500 / 500
+  Max hilos servidor   : 101
+[OK] Prueba de 500 superada.
+-----------------------------------------
+[>>] Lanzando prueba con 1000 clientes (Puerto: 14990)
+  Tiempo total         : 16.49 s
+  Clientes atendidos   : 1000 / 1000
+  Max hilos servidor   : 101
+[OK] Prueba de 1000 superada.
+=========================================
