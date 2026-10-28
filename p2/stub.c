@@ -11,6 +11,8 @@
 
 #define BUFFER_SIZE 1024
 
+#include "stub.h"
+
 unsigned int RELOJ = 0;
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
@@ -32,11 +34,43 @@ enum {
 	POLL_US = 10000		// 10ms entre comprobaciones cuando está lleno
 };
 
+// -- RELOJES DE LAMPORT --
+
 int get_clock_lamport() {
 
 	return RELOJ;
 }
 
+void update_clock_lamport(int counter) {
+
+	RELOJ = counter;
+}
+
+void lamport_logic(struct message message) {
+	unsigned int actual = 0;
+	unsigned int new_counter = message.clock_lamport;
+
+	actual = get_clock_lamport();
+
+	if (message.clock_lamport > actual)
+			actual = message.clock_lamport;
+	new_counter = actual + 1;
+	update_clock_lamport(new_counter);
+}
+
+void send_message(struct message message) {
+	unsigned int actual = 0;
+	(void)message;
+
+	actual = get_clock_lamport();
+	update_clock_lamport(actual + 1);
+}
+
+void receive_message(struct message message) {
+	lamport_logic(message);
+}
+
+// -----------------------
 /*
  * Manejador de la señal SIGINT (Control+C)
  *
