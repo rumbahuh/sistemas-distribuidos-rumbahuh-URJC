@@ -16,5 +16,5 @@ struct message {
 // (sockets).
 int get_clock_lamport();
 
-int createServer(int argc, char *argv[]);
-int createClient(int argc, char *argv[]);
+void send_message(struct message message);
+void receive_message(struct message message);
