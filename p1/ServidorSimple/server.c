@@ -16,7 +16,6 @@ volatile sig_atomic_t sigint = 1;
 enum {
 	MAX_LINE_LEN = 512,
 	BUF_SIZE = MAX_LINE_LEN + 2,	// +1 para el salto de línea y +1 para el \0 final
-	MAX_FAILS = 255,
 	DEFAULT_EXIT_CODE = 255
 };
 
@@ -40,18 +39,18 @@ handle_sigint(int sig)
 int
 main(void)
 {
-	// El cliente no escucha ni acepta nada,
-	// por lo que solo necesita un solo socket
-	int sock;
-	struct sockaddr_in serv_addr;
+	int server_fd, client_fd;
+	struct sockaddr_in address;
+	socklen_t addrlen = sizeof(address);
 	char buffer[BUFFER_SIZE] = { 0 };
+	int enable = 1;
 
 	// Debe leer de la entrada estandar
 	FILE *input = stdin;
 
 	// Registramos el sigint
 	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (fgets/read, connect) devuelven error con errno == EINTR
+	// (fgets/read, accept) devuelven error con errno == EINTR
 	// en vez de reiniciarse como hace signal() en glibc.
 	struct sigaction sa;
 
@@ -62,39 +61,82 @@ main(void)
 	sigaction(SIGINT, &sa, NULL);
 
 	// Create socket
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock < 0) {
+	server_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (server_fd < 0) {
 		perror("socket creation failed");
 		exit(EXIT_FAILURE);
 	}
+
 	printf("Socket successfully created...\n");
 
-	memset(&serv_addr, 0, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_port = htons(PORT);
-
-	// Convert IPv4 address from text to binary form
-	if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-		perror("invalid address");
-		close(sock);
+	// Reuse address and port
+	if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &enable,
+		       sizeof(enable)) < 0) {
+		perror("setsockopt failed");
+		close(server_fd);
 		exit(EXIT_FAILURE);
 	}
-	// Connect to server
-	if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-		// EINTR = Control+C mientras se conectaba, no es un error real
+
+	memset(&address, 0, sizeof(address));
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = inet_addr("127.0.0.1");
+	address.sin_port = htons(PORT);
+
+	// Bind socket
+	if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+		perror("bind failed");
+		close(server_fd);
+		exit(EXIT_FAILURE);
+	}
+	printf("Socket successfully binded...\n");
+
+	// Listen for incoming connections
+	if (listen(server_fd, 1) < 0) {
+		perror("listen failed");
+		close(server_fd);
+		exit(EXIT_FAILURE);
+	}
+
+	printf("Server listening...\n");
+
+	// Accept conection
+	client_fd = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+	if (client_fd < 0) {
+		// EINTR = Control+C mientras esperaba conexión, no es un error real
 		if (errno != EINTR) {
-			perror("connection failed");
-			close(sock);
+			perror("accept failed");
+			close(server_fd);
 			exit(EXIT_FAILURE);
 		}
 		printf("\nClosing cleanly...\n");
-		close(sock);
+		close(server_fd);
 		exit(EXIT_SUCCESS);
 	}
-	printf("connected to the server...\n");
 
 	while (sigint) {
 		char line[BUF_SIZE];
+
+		// recv (bloqueante: espera hasta que el cliente escriba)
+		int r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
+
+		if (r < 0) {
+			// EINTR = Control+C mientras esperaba, salimos por el while
+			if (errno != EINTR) {
+				perror("recv failed");
+			}
+
+			break;
+		}
+
+		if (r == 0) {
+			// El cliente cerró la conexión
+			printf("\nClient disconnected\n");
+
+			break;
+		}
+
+		buffer[r] = '\0';
+		printf("+++ %s", buffer);
 
 		// Especificación de indicación de lectura
 		printf(">");
@@ -115,13 +157,14 @@ main(void)
 			}
 
 			fprintf(stderr, "error reading input\n");
-			close(sock);
+			close(client_fd);
+			close(server_fd);
 			return DEFAULT_EXIT_CODE;
 		}
-		// Send message
-		int r = send(sock, line, strlen(line), 0);
+		// Send reply: si el cliente cierra, no mata el proceso
+		int s = send(client_fd, line, strlen(line), MSG_NOSIGNAL);
 
-		if (r < 0) {
+		if (s < 0) {
 			// EINTR = Control+C mientras enviaba, salimos por el while
 			if (errno != EINTR) {
 				perror("send failed");
@@ -129,41 +172,17 @@ main(void)
 
 			break;
 		}
-		// Especificacion de espera de cliente: 0.5 segundos
-		usleep(500000);
-
-		// recv (no bloqueante)
-		int n = recv(sock, buffer, BUFFER_SIZE - 1, MSG_DONTWAIT);
-
-		if (n < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
-				// No hay nada que leer: volvemos a mostrar el prompt
-				continue;
-			}
-			// EINTR = Control+C mientras recibía, salimos por el while
-			if (errno != EINTR) {
-				perror("recv failed");
-			}
-
-			break;
-		}
-
-		if (n == 0) {
-			// El servidor cerró la conexión
-			printf("\nServer disconnected\n");
-
-			break;
-		}
-
-		buffer[n] = '\0';
-		printf("+++ %s", buffer);
 	}
 
-	// Close socket (fuera del bucle, para cerrarlo una sola vez)
-	close(sock);		// ROBERTO DICE QUE ESTO NO VA AQUI
+	// Close sockets (fuera del bucle, para cerrarlos una sola vez)
+	close(client_fd);
 
 	if (!sigint) {
 		printf("\nClosing cleanly...\n");
+	}
+
+	if (server_fd >= 0) {
+		close(server_fd);
 	}
 
 	exit(EXIT_SUCCESS);
