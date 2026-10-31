@@ -14,6 +14,7 @@
 #include "stub.h"
 
 unsigned int RELOJ = 0;
+char node_name[20];
 
 // volatile sig_atomic_t: el compilador no puede cachearla en un registro
 volatile sig_atomic_t sigint = 1;
@@ -58,16 +59,41 @@ void lamport_logic(struct message message) {
 	update_clock_lamport(new_counter);
 }
 
+char *operation_to_string(enum operations action) {
+    switch (action) {
+        case READY_TO_SHUTDOWN:
+            return "READY_TO_SHUTDOWN";
+        case SHUTDOWN_NOW:
+            return "SHUTDOWN_NOW";
+        case SHUTDOWN_ACK:
+            return "SHUTDOWN_ACK";
+        default:
+            return "UNKNOWN";
+    }
+}
+
 void send_message(struct message message) {
 	unsigned int actual = 0;
-	(void)message;
 
 	actual = get_clock_lamport();
 	update_clock_lamport(actual + 1);
+
+	// Especificacion de prints
+	fprintf(stdout, "%s, %d, SEND, %s\n",
+            message.origin,
+            get_clock_lamport(),
+            operation_to_string(message.action));
 }
 
 void receive_message(struct message message) {
 	lamport_logic(message);
+
+	// Especificacion de prints
+	fprintf(stdout, "%s, %d, RECV (%s), %s\n",
+            node_name,
+            get_clock_lamport(),
+            message.origin, // Quien envio el mensaje
+            operation_to_string(message.action));
 }
 
 // -----------------------

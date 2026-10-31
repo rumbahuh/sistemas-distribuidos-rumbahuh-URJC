@@ -29,6 +29,8 @@ void funcion_ack() {
 }
 
 int main() {
+	strcpy(node_name, "P3");
+	
 	// Fase 1: mandar READY
 	while (get_clock_lamport() != VALUE_READY) {
 		// Usar un pequeño sleep o usleep para evitar consumo de CPU del 100%

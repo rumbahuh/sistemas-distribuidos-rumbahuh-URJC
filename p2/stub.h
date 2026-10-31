@@ -1,3 +1,8 @@
+#ifndef STUB_H
+#define STUB_H
+
+extern char node_name[20];
+
 enum operations {
 	READY_TO_SHUTDOWN = 0,
 	SHUTDOWN_NOW,
@@ -18,3 +23,5 @@ int get_clock_lamport();
 
 void send_message(struct message message);
 void receive_message(struct message message);
+
+#endif
