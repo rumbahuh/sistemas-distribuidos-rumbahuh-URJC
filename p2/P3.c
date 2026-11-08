@@ -1,67 +1,71 @@
-// Nodo de control de motores y actuadores físicos
-//		actuator_node
+// Motor and physical actuator control node
+// actuator_node
 
 #include "stub.h"
-#include <unistd.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+
+#define SUPERVISOR_NAME "P2"
+#define WAIT_INTERVAL_US 10000
 
 enum {
-	VALUE_READY = 0, // Manda R_T_S a P2 y pasa a 1
-	VALUE_ACK = 9 // Manda SD_ACK a P2 y pasa a 10
+    VALUE_READY = 0, // Sends READY_TO_SHUTDOWN to P2 and advances to 1
+    VALUE_ACK = 9    // Sends SHUTDOWN_ACK to P2 and advances to 10
 };
 
-void funcion_ready() {
-	struct message message = {0};
+void send_ready() {
+    struct message message = {0};
 
-	strcpy(message.origin, "P3");
+    strcpy(message.origin, node_name);
     message.action = READY_TO_SHUTDOWN;
 
-    send_message(message, "P2");
+    send_message(message, SUPERVISOR_NAME);
 }
 
-void funcion_ack() {
-	struct message message = {0};
+void send_ack() {
+    struct message message = {0};
 
-	strcpy(message.origin, "P3");
+    strcpy(message.origin, node_name);
     message.action = SHUTDOWN_ACK;
 
-    send_message(message, "P2");
+    send_message(message, SUPERVISOR_NAME);
 }
 
 int main(int argc, char *argv[]) {
-	if (!check_arguments(argc, argv)) {
-		return 1;
-	}
+    setbuf(stdout, NULL);
 
-	strcpy(node_name, "P3");
+    if (!check_arguments(argc, argv)) {
+        return 1;
+    }
 
-	// Conectar con el supervisor
-	if (createClient(argv[1], argv[2]) != 0) {
-		return 1;
-	}
-	
-	// Fase 1: mandar READY
-	while (get_clock_lamport() != VALUE_READY) {
-		// Usar un pequeño sleep o usleep para evitar consumo de CPU del 100%
-		// (comprobar con htop)
-		usleep(10000);
-	}
+    strcpy(node_name, "P3");
 
-	funcion_ready();
+    // Connect to the supervisor
+    if (create_client(argv[1], argv[2]) != 0) {
+        return 1;
+    }
 
-	// Fase 2: mandar ACK
-	while (get_clock_lamport() != VALUE_ACK) {
-		// Usar un pequeño sleep o usleep para evitar consumo de CPU del 100%
-		// (comprobar con htop)
-		usleep(10000);
-	}
+    // Phase 1: send READY
+    while (get_clock_lamport() != VALUE_READY) {
+        // Avoid 100% CPU usage while waiting
+        usleep(WAIT_INTERVAL_US);
+    }
 
-	funcion_ack();
+    send_ready();
 
-	// Esperar al hilo de recepción y cerrar la conexión
-	if (close_client() != 0) {
-		return 1;
-	}
+    // Phase 2: send ACK
+    while (get_clock_lamport() != VALUE_ACK) {
+        // Avoid 100% CPU usage while waiting
+        usleep(WAIT_INTERVAL_US);
+    }
 
-	return 0;
+    send_ack();
+
+    // Wait for the receiver thread and close the connection
+    if (close_client() != 0) {
+        return 1;
+    }
+
+    return 0;
 }
