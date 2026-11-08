@@ -5,7 +5,6 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <signal.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -15,9 +14,6 @@
 
 unsigned int RELOJ = 0;
 char node_name[20];
-
-// volatile sig_atomic_t: el compilador no puede cachearla en un registro
-volatile sig_atomic_t sigint = 1;
 
 // Para no sufrir de condiciones de carrera
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -151,23 +147,6 @@ void receive_message(struct message message) {
 
 // -----------------------
 /*
- * Manejador de la señal SIGINT (Control+C)
- *
- * Se trata de una subrutina de interrupcion
- * que bloquea el while asi que gastamos un 
- * mínimo tiempo usando el flag signint.
- */
-void
-handle_sigint(int sig)
-{
-	// Evito un warning
-	(void)sig;
-
-	// Seteo la flag
-	sigint = 0;
-}
-
-/*
  * Convierte texto a número en el rango [min, max]. 
  * Devuelve -1 si no es válido.
  */
@@ -284,7 +263,7 @@ thread_client(void *arg)
     free(arg);
 
     // Recibir mensajes mientras la conexión esté abierta
-    while (sigint) {
+    while (1) {
         recibidos = 0;
 
         // Recibir todos los bytes de la estructura
@@ -371,8 +350,6 @@ void *createServer(void *arg) {
 
     struct sockaddr_in address;
     socklen_t addrlen = sizeof(address);
-
-    struct sigaction sa;
     
     pthread_t threads[2];
     int num_threads = 0;
@@ -380,26 +357,13 @@ void *createServer(void *arg) {
     // Sin buffering, obligatorio en prácticas
     setbuf(stdout, NULL);
 
-    // Registramos el sigint
-    // Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-    // (accept) devuelven error con errno == EINTR.
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = handle_sigint;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-
-    if (sigaction(SIGINT, &sa, NULL) < 0) {
-        perror("sigaction failed");
-        exit(EXIT_FAILURE);
-    }
-
     // Create and configure server socket
     server_fd = create_server_socket(port);
     if (server_fd < 0) {
         exit(EXIT_FAILURE);
     }
 
-    while (sigint && num_threads < 2) {
+    while (num_threads < 2) {
         int *client_fd_copia;
         int err;
 
@@ -454,10 +418,6 @@ void *createServer(void *arg) {
     // [DETACH]
     for (int i = 0; i < num_threads; i++) {
         pthread_join(threads[i], NULL);
-    }
-
-    if (!sigint) {
-        printf("\nClosing cleanly...\n");
     }
 
     if (server_fd >= 0) {
