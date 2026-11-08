@@ -13,7 +13,7 @@ enum {
 };
 
 void funcion_shutdown_p1() {
-    struct message message;
+    struct message message = {0};
 
     strcpy(message.origin, "P2");
     message.action = SHUTDOWN_NOW;
@@ -22,7 +22,7 @@ void funcion_shutdown_p1() {
 }
 
 void funcion_shutdown_p3() {
-    struct message message;
+    struct message message = {0};
 
     strcpy(message.origin, "P2");
     message.action = SHUTDOWN_NOW;

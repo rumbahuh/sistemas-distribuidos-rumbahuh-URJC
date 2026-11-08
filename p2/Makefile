@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -Wshadow -O2
+CFLAGS = -Wall -Wextra -Wshadow -g -O0 -pthread
 
 TARGETS = P1 P2 P3
 

@@ -11,7 +11,7 @@ enum {
 };
 
 void funcion_ready() {
-	struct message message;
+	struct message message = {0};
 
 	strcpy(message.origin, "P3");
     message.action = READY_TO_SHUTDOWN;
@@ -20,7 +20,7 @@ void funcion_ready() {
 }
 
 void funcion_ack() {
-	struct message message;
+	struct message message = {0};
 
 	strcpy(message.origin, "P3");
     message.action = SHUTDOWN_ACK;
@@ -57,6 +57,11 @@ int main(int argc, char *argv[]) {
 	}
 
 	funcion_ack();
+
+	// Esperar al hilo de recepción y cerrar la conexión
+	if (close_client() != 0) {
+		return 1;
+	}
 
 	return 0;
 }

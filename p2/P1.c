@@ -11,7 +11,7 @@ enum {
 };
 
 void funcion_ready() {
-	struct message message;
+	struct message message = {0};
 
 	strcpy(message.origin, "P1");
     message.action = READY_TO_SHUTDOWN;
@@ -20,7 +20,7 @@ void funcion_ready() {
 }
 
 void funcion_ack() {
-	struct message message;
+	struct message message = {0};
 
 	strcpy(message.origin, "P1");
     message.action = SHUTDOWN_ACK;
