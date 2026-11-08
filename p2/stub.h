@@ -4,24 +4,31 @@
 extern char node_name[20];
 
 enum operations {
-	READY_TO_SHUTDOWN = 0,
-	SHUTDOWN_NOW,
-	SHUTDOWN_ACK
+    READY_TO_SHUTDOWN = 0,
+    SHUTDOWN_NOW,
+    SHUTDOWN_ACK
 };
 
 struct message {
-	char origin[20]; // nombre del nodo ej. P1
-	enum operations action; // READY_TO_SHUTDOWN SHUTDOWN_NOW SHUTDOWN_ACK
-	unsigned int clock_lamport; // valor del contador logico de Lamport del emisor
+    char origin[20];              // Nombre del nodo emisor (ej. P1)
+    enum operations action;       // Operacion solicitada
+    unsigned int clock_lamport;   // Reloj logico del emisor
 };
 
-// Obtiene el valor actual del reloj de Lamport.
-// Utilízalo cada vez que necesites consultar el tiempo lógico del nodo.
-// Esta función NO puede realizar ninguna operación de comunicación por red
-// (sockets).
-int get_clock_lamport();
+// Consulta el reloj local de Lamport sin realizar operaciones de red.
+int get_clock_lamport(void);
 
-void send_message(struct message message);
+// Comprueba los argumentos recibidos por el programa principal.
+int check_arguments(int argc, char *argv[]);
+
+// Envio y recepcion de mensajes (implementados en stub.c).
+void send_message(struct message message, const char *destino);
 void receive_message(struct message message);
+
+// Inicializacion y finalizacion de las comunicaciones.
+int init_server(const char *puerto_texto);
+int createClient(const char *ip, const char *puerto_texto);
+int close_client(void);
+int close_server(void);
 
 #endif

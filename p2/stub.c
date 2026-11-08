@@ -22,41 +22,40 @@ volatile sig_atomic_t sigint = 1;
 // Para no sufrir de condiciones de carrera
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// hilos atendiendo clientes ahora mismo
-int active_threads = 0;
-
 enum {
 	MIN_ID = 1,
 	MAX_ID = 1000000,
 	MIN_PORT = 1024,
 	MAX_PORT = 65535,
 	BACKLOG = 128,
-	MAX_THREADS = 100,
-	POLL_US = 10000		// 10ms entre comprobaciones cuando está lleno
 };
 
+pthread_t server_thread;
+pthread_t client_thread;
+
+int socket_p1 = -1;
+int socket_p2 = -1;
+int socket_p3 = -1;
+
 // -- RELOJES DE LAMPORT --
-
 int get_clock_lamport() {
+    int actual;
 
-	return RELOJ;
+    pthread_mutex_lock(&mutex);
+
+    actual = RELOJ;
+
+    pthread_mutex_unlock(&mutex);
+
+    return actual;
 }
 
 void update_clock_lamport(int counter) {
+    pthread_mutex_lock(&mutex);
 
 	RELOJ = counter;
-}
 
-void lamport_logic(struct message message) {
-	unsigned int actual = 0;
-	unsigned int new_counter = message.clock_lamport;
-
-	actual = get_clock_lamport();
-
-	if (message.clock_lamport > actual)
-			actual = message.clock_lamport;
-	new_counter = actual + 1;
-	update_clock_lamport(new_counter);
+    pthread_mutex_unlock(&mutex);
 }
 
 char *operation_to_string(enum operations action) {
@@ -72,28 +71,82 @@ char *operation_to_string(enum operations action) {
     }
 }
 
-void send_message(struct message message) {
-	unsigned int actual = 0;
+void send_message(struct message message, const char *destino) {
+    int sock = -1;
+    ssize_t r;
+    size_t enviados = 0;
+    char *buffer = (char *)&message;
 
-	actual = get_clock_lamport();
-	update_clock_lamport(actual + 1);
+    pthread_mutex_lock(&mutex);
 
-	// Especificacion de prints
-	fprintf(stdout, "%s, %d, SEND, %s\n",
+    // Seleccionar el socket del destinatario
+    if (strcmp(destino, "P1") == 0) {
+        sock = socket_p1;
+    }
+    else if (strcmp(destino, "P2") == 0) {
+        sock = socket_p2;
+    }
+    else if (strcmp(destino, "P3") == 0) {
+        sock = socket_p3;
+    }
+
+    if (sock < 0) {
+        pthread_mutex_unlock(&mutex);
+        fprintf(stderr, "No existe conexión con %s\n", destino);
+        return;
+    }
+
+    // Actualizar el reloj de Lamport
+    RELOJ++;
+    message.clock_lamport = RELOJ;
+
+    // Enviar todos los bytes del mensaje
+    while (enviados < sizeof(message)) {
+        r = send(sock, buffer + enviados,
+                 sizeof(message) - enviados, 0);
+
+        if (r < 0) {
+            perror("send failed");
+            pthread_mutex_unlock(&mutex);
+            return;
+        }
+
+        if (r == 0) {
+            fprintf(stderr, "No se pudo completar el envío\n");
+            pthread_mutex_unlock(&mutex);
+            return;
+        }
+
+        enviados += r;
+    }
+
+    // Especificacion de prints
+    fprintf(stdout, "%s, %u, SEND, %s\n",
             message.origin,
-            get_clock_lamport(),
+            message.clock_lamport,
             operation_to_string(message.action));
+
+    pthread_mutex_unlock(&mutex);
 }
 
 void receive_message(struct message message) {
-	lamport_logic(message);
+    pthread_mutex_lock(&mutex);
 
-	// Especificacion de prints
-	fprintf(stdout, "%s, %d, RECV (%s), %s\n",
+    // Actualizar reloj de Lamport
+    if (message.clock_lamport > RELOJ) {
+        RELOJ = message.clock_lamport;
+    }
+
+    RELOJ++;
+
+    // Especificacion de prints
+    fprintf(stdout, "%s, %u, RECV (%s), %s\n",
             node_name,
-            get_clock_lamport(),
-            message.origin, // Quien envio el mensaje
+            RELOJ,
+            message.origin,
             operation_to_string(message.action));
+
+    pthread_mutex_unlock(&mutex);
 }
 
 // -----------------------
@@ -137,6 +190,30 @@ parse_number(const char *text, long min, long max)
 	}
 
 	return value;
+}
+
+int check_arguments(int argc, char *argv[]) {
+    struct in_addr address;
+    long port;
+
+    if (argc != 3) {
+        fprintf(stderr, "Usage: ./P2 <ip> <puerto>\n");
+        return 0;
+    }
+
+    if (inet_pton(AF_INET, argv[1], &address) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", argv[1]);
+        return 0;
+    }
+
+    port = parse_number(argv[2], MIN_PORT, MAX_PORT);
+
+    if (port < 0) {
+        fprintf(stderr, "Invalid port [1024, 65535]\n");
+        return 0;
+    }
+
+    return 1;
 }
 
 // -- SERVIDOR --
@@ -192,203 +269,202 @@ create_server_socket(long port)
 }
 
 /*
- * Espera hasta que haya hueco para un hilo más y lo reserva.
- * Devuelve 0 si se hizo Control+C mientras ocurre la espera
- */
-int
-wait_for_slot(void)
-{
-	while (sigint) {
-		pthread_mutex_lock(&mutex);
-
-		if (active_threads < MAX_THREADS) {
-			active_threads++;
-			pthread_mutex_unlock(&mutex);
-
-			return 1;
-		}
-
-		pthread_mutex_unlock(&mutex);
-
-		usleep(POLL_US);
-	}
-
-	return 0;
-}
-
-// Libera un hueco
-void
-release_slot(void)
-{
-	pthread_mutex_lock(&mutex);
-	active_threads--;
-	pthread_mutex_unlock(&mutex);
-}
-
-/*
  * Función que ejecuta cada hilo: atiende a un único cliente.
  * Recibe una copia en memoria dinámica del client_fd.
  */
 void *
 thread_client(void *arg)
 {
-	int client_fd = *(int *)arg;	// Hago un cast
-	char buffer[BUFFER_SIZE] = { 0 };	// Local al hilo, no se comparte
-	const char *reply = "Hello client!";
-	unsigned int seed = (unsigned int)time(NULL) ^ (unsigned int)client_fd;
-	int r;
+    int client_fd = *(int *)arg;
+    int r;
+    size_t recibidos;
+    struct message message;
+    char *buffer = (char *)&message;
 
-	free(arg);		// Libero la copia de memoria dinámica
+    free(arg);
 
-	// recv (bloqueante: este hilo solo atiende a un cliente)
-	r = recv(client_fd, buffer, BUFFER_SIZE - 1, 0);
-	if (r < 0) {
-		perror("recv failed");
-		goto end;
-	}
+    // Recibir mensajes mientras la conexión esté abierta
+    while (sigint) {
+        recibidos = 0;
 
-	if (r == 0) {
-		// El cliente cerró la conexión sin enviar nada
-		goto end;
-	}
+        // Recibir todos los bytes de la estructura
+        while (recibidos < sizeof(message)) {
+            r = recv(client_fd, buffer + recibidos,
+                     sizeof(message) - recibidos, 0);
 
-	buffer[r] = '\0';
-	printf("+++ %s\n", buffer);
+            if (r < 0) {
+                perror("recv failed");
+                break;
+            }
 
-	// Espera aleatoria entre 0.5 y 2 segundos (en microsegundos)
-	usleep(500000 + rand_r(&seed) % 1500001);
+            if (r == 0) {
+                // El cliente ha cerrado la conexión
+                break;
+            }
 
-	// Send reply
-	if (send(client_fd, reply, strlen(reply), 0) < 0) {
-		perror("send failed");
-	}
+            recibidos += r;
+        }
 
- end:
-	close(client_fd);
-	release_slot();
+        // Si el mensaje está incompleto, terminar
+        if (recibidos != sizeof(message)) {
+            break;
+        }
 
-	return NULL;
+        // Identificar las conexiones de P1 y P3 en el supervisor
+        if (strcmp(node_name, "P2") == 0 &&
+            message.action == READY_TO_SHUTDOWN) {
+
+            pthread_mutex_lock(&mutex);
+
+            if (strcmp(message.origin, "P1") == 0) {
+                socket_p1 = client_fd;
+            }
+            else if (strcmp(message.origin, "P3") == 0) {
+                socket_p3 = client_fd;
+            }
+
+            pthread_mutex_unlock(&mutex);
+        }
+
+        // Procesar el mensaje completo
+        receive_message(message);
+
+        // El supervisor ha recibido la confirmación de apagado
+        if (strcmp(node_name, "P2") == 0 &&
+            message.action == SHUTDOWN_ACK) {
+            break; // Sale del bucle y continua hasta close
+        }
+
+        // El cliente ha recibido la orden de apagado
+        if (strcmp(node_name, "P2") != 0 &&
+            message.action == SHUTDOWN_NOW) {
+            return NULL; // Necesitamos ack, asi que no termino el client
+        }
+    }
+
+    pthread_mutex_lock(&mutex);
+
+    if (socket_p1 == client_fd) {
+        socket_p1 = -1;
+    }
+
+    if (socket_p2 == client_fd) {
+        socket_p2 = -1;
+    }
+
+    if (socket_p3 == client_fd) {
+        socket_p3 = -1;
+    }
+
+    pthread_mutex_unlock(&mutex);
+
+    close(client_fd);
+
+    return NULL;
 }
 
-int createServer(int argc, char *argv[]) {
-	int server_fd, client_fd;
-	struct sockaddr_in address;
-	socklen_t addrlen = sizeof(address);
-	long port;		// [1024, 65535]
-	int opt;
+void *createServer(void *arg) {
+    long port = *(long *)arg;
+    free(arg);
 
-	struct sigaction sa;
+    int server_fd, client_fd;
 
-	// Sin buffering, obligatorio en prácticas
-	setbuf(stdout, NULL);
+    struct sockaddr_in address;
+    socklen_t addrlen = sizeof(address);
 
-	// No se aceptan opciones: si getopt encuentra alguna, es un error
-	while ((opt = getopt(argc, argv, "")) != -1) {
-		fprintf(stderr, "Usage: ./server [port_number]\n");
-		exit(EXIT_FAILURE);
-	}
+    struct sigaction sa;
+    
+    pthread_t threads[2];
+    int num_threads = 0;
 
-	// Los argumentos se entienden diferentemente
-	// usando optind en lugar de argv++ y argc--.
-	// Empieza en optind, así que restamos
-	if (argc - optind != 1) {
-		fprintf(stderr, "Usage: ./server [port_number]\n");
-		exit(EXIT_FAILURE);
-	}
+    // Sin buffering, obligatorio en prácticas
+    setbuf(stdout, NULL);
 
-	port = parse_number(argv[optind], MIN_PORT, MAX_PORT);
-	if (port < 0) {
-		fprintf(stderr, "Invalid port [1024, 65535]\n");
-		exit(EXIT_FAILURE);
-	}
-	// Registramos el sigint
-	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (fgets/read, accept) devuelven error con errno == EINTR
-	// en vez de reiniciarse como hace signal() en glibc.
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = handle_sigint;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
-	if (sigaction(SIGINT, &sa, NULL) < 0) {
-		perror("sigaction failed");
-		exit(EXIT_FAILURE);
-	}
-	// Create and configure server socket
-	server_fd = create_server_socket(port);
-	if (server_fd < 0) {
-		exit(EXIT_FAILURE);
-	}
+    // Registramos el sigint
+    // Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
+    // (accept) devuelven error con errno == EINTR.
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sigint;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
 
-	while (sigint) {
-		pthread_t thread;
-		int *client_fd_copia;
-		int err;
+    if (sigaction(SIGINT, &sa, NULL) < 0) {
+        perror("sigaction failed");
+        exit(EXIT_FAILURE);
+    }
 
-		// Para no sobreescribir, reiniciamos addrlen
-		addrlen = sizeof(address);
+    // Create and configure server socket
+    server_fd = create_server_socket(port);
+    if (server_fd < 0) {
+        exit(EXIT_FAILURE);
+    }
 
-		// Si hay 100 hilos activos no aceptamos más: esperan en la cola del kernel
-		if (!wait_for_slot()) {
-			break;
-		}
-		// Accept conections
-		client_fd =
-		    accept(server_fd, (struct sockaddr *)&address, &addrlen);
-		if (client_fd < 0) {
-			release_slot();	// No usaremos el hueco reservado para su thread
+    while (sigint && num_threads < 2) {
+        int *client_fd_copia;
+        int err;
 
-			// EINTR = Control+C mientras esperaba conexión, no es un error real
-			if (errno != EINTR) {
-				perror("accept failed");
-				close(server_fd);
-				exit(EXIT_FAILURE);
-			}
+        // Para no sobreescribir, reiniciamos addrlen
+        addrlen = sizeof(address);
 
-			continue;
-		}
-		// Cada hilo recibe su propia copia del descriptor
-		client_fd_copia = malloc(sizeof(int));
-		if (client_fd_copia == NULL) {
-			perror("malloc failed");
-			close(client_fd);
-			release_slot();
+        // Accept connections
+        client_fd =
+            accept(server_fd, (struct sockaddr *)&address, &addrlen);
 
-			continue;
-		}
-		*client_fd_copia = client_fd;
+        if (client_fd < 0) {
 
-		err =
-		    pthread_create(&thread, NULL, thread_client,
-				   client_fd_copia);
-		if (err != 0) {
-			fprintf(stderr, "pthread_create failed: %s\n",
-				strerror(err));
-			free(client_fd_copia);
-			close(client_fd);
-			release_slot();	// porque wait_for_slot() incrementó active_threads
+            // EINTR = Control+C mientras esperaba conexión
+            if (errno != EINTR) {
+                perror("accept failed");
+                close(server_fd);
+                exit(EXIT_FAILURE);
+            }
 
-			continue;
-		}		// Especificación de errores de primitivas
+            continue;
+        }
 
-		// No permito join, para que cada hilo libre recursos al terminar
-		err = pthread_detach(thread);
-		if (err != 0) {
-			fprintf(stderr, "pthread_detach failed: %s\n",
-				strerror(err));
-		}
+        // Cada hilo recibe su propia copia del descriptor
+        client_fd_copia = malloc(sizeof(int));
 
-		printf("Client connected...\n");
-	}
+        if (client_fd_copia == NULL) {
+            perror("malloc failed");
+            close(client_fd);
+            continue;
+        }
 
-	if (!sigint) {
-		printf("\nClosing cleanly...\n");
-	}
+        *client_fd_copia = client_fd;
 
-	if (server_fd >= 0) {
-		close(server_fd);
-	}
+        err = pthread_create(&threads[num_threads], NULL,
+                     thread_client, client_fd_copia);
 
-	exit(EXIT_SUCCESS);
+        if (err != 0) {
+            fprintf(stderr, "pthread_create failed: %s\n",
+                    strerror(err));
+            free(client_fd_copia);
+            close(client_fd);
+
+            continue;
+        }
+
+        num_threads++;
+
+        printf("Client connected...\n");
+    }
+
+    // Aquí eliminé detached
+    // [DETACH]
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    if (!sigint) {
+        printf("\nClosing cleanly...\n");
+    }
+
+    if (server_fd >= 0) {
+        close(server_fd);
+    }
+
+    return NULL;
 }
 // --------------
 
@@ -398,142 +474,169 @@ int createServer(int argc, char *argv[]) {
  * Crea el socket y conecta con el servidor.
  * Devuelve el descriptor del socket o -1 si ocurre un error.
  */
-int
-connect_to_server(const char *ip, long port)
+int connect_to_server(const char *ip, long port)
 {
-	int sock;
-	struct sockaddr_in serv_addr;
+    int sock;
+    struct sockaddr_in serv_addr;
 
-	memset(&serv_addr, 0, sizeof(serv_addr));
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_port = htons(port);
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
 
-	// Convert IPv4 address from text to binary form
-	if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0) {
-		fprintf(stderr, "Invalid IP address: %s\n", ip);
-		return -1;
-	}
-	// Create socket
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock < 0) {
-		perror("socket creation failed");
-		return -1;
-	}
+    // Convert IPv4 address from text to binary form
+    if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0) {
+        fprintf(stderr, "Invalid IP address: %s\n", ip);
+        return -1;
+    }
 
-	printf("Socket successfully created...\n");
+    // Create socket
+    sock = socket(AF_INET, SOCK_STREAM, 0);
 
-	// Connect to server
-	if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-		// EINTR = Control+C mientras se conectaba, no es un error real
-		if (errno != EINTR) {
-			perror("connection failed");
-		}
+    if (sock < 0) {
+        perror("socket creation failed");
+        return -1;
+    }
 
-		close(sock);
-		return -1;
-	}
+    printf("Socket successfully created...\n");
 
-	printf("connected to the server...\n");
+    // Connect to server
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        if (errno != EINTR) {
+            perror("connection failed");
+        }
 
-	return sock;
+        close(sock);
+        return -1;
+    }
+
+    printf("connected to the server...\n");
+
+    return sock;
 }
 
-int createClient(int argc, char *argv[]) {
-	// El cliente no escucha ni acepta nada,
-	// por lo que solo necesita un solo socket
-	int sock;
-	char buffer[BUFFER_SIZE] = { 0 };
-	long port;		// [1024, 65535]
-	long client_id;		// [1, MAX_ID]
-	int opt;
-	int n;
-	struct sigaction sa;
+int createClient(const char *ip, const char *puerto_texto)
+{
+    int *client_fd_copia;
+    int err;
 
-	// Sin buffering, obligatorio en prácticas
-	setbuf(stdout, NULL);
+    long port = parse_number(puerto_texto, MIN_PORT, MAX_PORT);
 
-	while ((opt = getopt(argc, argv, "")) != -1) {
-		fprintf(stderr,
-			"Usage: ./client [client_id] [ip] [port_number]\n");
-		exit(EXIT_FAILURE);
-	}
+    if (port < 0) {
+        return -1;
+    }
 
-	if (argc - optind != 3) {
-		fprintf(stderr,
-			"Usage: ./client [client_id] [ip] [port_number]\n");
-		exit(EXIT_FAILURE);
-	}
+    socket_p2 = connect_to_server(ip, port);
 
-	client_id = parse_number(argv[optind], MIN_ID, MAX_ID);
-	if (client_id < 0) {
-		fprintf(stderr, "Invalid client_id [1, 1000000]\n");
-		exit(EXIT_FAILURE);
-	}
+    if (socket_p2 < 0) {
+        return -1;
+    }
 
-	port = parse_number(argv[optind + 2], MIN_PORT, MAX_PORT);
-	if (port < 0) {
-		fprintf(stderr, "Invalid port [1024, 65535]\n");
-		exit(EXIT_FAILURE);
-	}
-	// Registramos el sigint
-	// Con sigaction y SIN SA_RESTART, las llamadas bloqueantes
-	// (connect) devuelven error con errno == EINTR
-	// en vez de reiniciarse como hace signal() en glibc.
-	memset(&sa, 0, sizeof(sa));
-	sa.sa_handler = handle_sigint;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = 0;
+    // Reservamos memoria para el descriptor del socket
+    client_fd_copia = malloc(sizeof(int));
 
-	if (sigaction(SIGINT, &sa, NULL) < 0) {
-		perror("sigaction failed");
-		exit(EXIT_FAILURE);
-	}
+    if (client_fd_copia == NULL) {
+        perror("malloc failed");
+        close(socket_p2);
+        socket_p2 = -1;
+        return -1;
+    }
 
-	sock = connect_to_server(argv[optind + 1], port);
-	if (sock < 0) {
-		if (!sigint) {
-			printf("\nClosing cleanly...\n");
-			exit(EXIT_SUCCESS);
-		}
+    *client_fd_copia = socket_p2;
 
-		exit(EXIT_FAILURE);
-	}
-	// Mensaje del enunciado: "Hello server! From client: <id>"
-	snprintf(buffer, BUFFER_SIZE, "Hello server! From client: %ld",
-		 client_id);
+    // Creamos el hilo secundario de recepción
+    err = pthread_create(&client_thread, NULL,
+                         thread_client, client_fd_copia);
 
-	// Send message
-	if (send(sock, buffer, strlen(buffer), 0) < 0) {
-		perror("send failed");
-		close(sock);
-		exit(EXIT_FAILURE);
-	}
-	// recv (bloqueante: espera la respuesta del servidor)
-	n = recv(sock, buffer, BUFFER_SIZE - 1, 0);
-	if (n < 0) {
-		// EINTR = Control+C mientras esperaba, no es un error real
-		if (errno != EINTR) {
-			perror("recv failed");
-			close(sock);
-			exit(EXIT_FAILURE);
-		}
+    if (err != 0) {
+        fprintf(stderr, "pthread_create failed: %s\n",
+                strerror(err));
+        free(client_fd_copia);
+        close(socket_p2);
+        socket_p2 = -1;
+        return -1;
+    }
 
-		close(sock);
-		exit(EXIT_SUCCESS);
-	}
+    return 0;
+}
 
-	if (n == 0) {
-		// El servidor cerró la conexión sin responder
-		printf("\nServer disconnected\n");
-	} else {
-		buffer[n] = '\0';
-		printf("+++ %s\n", buffer);
-	}
+int close_client(void) {
+    int err;
+    int sock;
 
-	// Close socket
-	close(sock);
+    // Esperar a que termine el hilo de recepción
+    err = pthread_join(client_thread, NULL);
 
-	exit(EXIT_SUCCESS);
+    if (err != 0) {
+        fprintf(stderr, "pthread_join failed: %s\n",
+                strerror(err));
+        return -1;
+    }
+
+    // Recuperar el socket y marcarlo como cerrado
+    pthread_mutex_lock(&mutex);
+
+    sock = socket_p2;
+    socket_p2 = -1;
+
+    pthread_mutex_unlock(&mutex);
+
+    // Cerrar la conexión
+    if (sock >= 0) {
+        if (close(sock) < 0) {
+            perror("close failed");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int init_server(const char *puerto_texto) {
+
+    long port = parse_number(puerto_texto, MIN_PORT, MAX_PORT);
+
+    if (port < 0) {
+        return -1;
+    }
+
+    long *port_copia;
+    int err;
+
+    port_copia = malloc(sizeof(long));
+
+    if (port_copia == NULL) {
+        perror("malloc failed");
+        return -1;
+    }
+
+    *port_copia = port;
+
+    err = pthread_create(&server_thread, NULL,
+                         createServer, port_copia);
+
+    if (err != 0) {
+        fprintf(stderr, "pthread_create failed: %s\n",
+                strerror(err));
+        free(port_copia);
+        return -1;
+    }
+
+    return 0;
+}
+
+int close_server(void) {
+    int err;
+
+    // Esperar a que termine el hilo del servidor
+    err = pthread_join(server_thread, NULL);
+
+    if (err != 0) {
+        fprintf(stderr, "pthread_join failed: %s\n",
+                strerror(err));
+        return -1;
+    }
+
+    return 0;
 }
 // -------------
 

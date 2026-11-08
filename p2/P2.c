@@ -18,7 +18,7 @@ void funcion_shutdown_p1() {
     strcpy(message.origin, "P2");
     message.action = SHUTDOWN_NOW;
 
-    send_message(message);
+    send_message(message, "P1");
 }
 
 void funcion_shutdown_p3() {
@@ -27,11 +27,20 @@ void funcion_shutdown_p3() {
     strcpy(message.origin, "P2");
     message.action = SHUTDOWN_NOW;
 
-    send_message(message);
+    send_message(message, "P3");
 }
 
-int main() {
-	strcpy(node_name, "P3");
+int main(int argc, char *argv[]) {
+	if (!check_arguments(argc, argv)) {
+		return 1;
+	}
+	
+	strcpy(node_name, "P2");
+
+	// Inicializar servidor
+	if (init_server(argv[2]) != 0) {
+		return 1;
+	}
 
 	// Fase 1: mandar SHUTDOWN NOW a P1
 	while (get_clock_lamport() != VALUE_SHUTDOWN_P1) {
@@ -56,6 +65,11 @@ int main() {
 		// Usar un pequeño sleep o usleep para evitar consumo de CPU del 100%
 		// (comprobar con htop)
 		usleep(10000);
+	}
+
+	// Esperar a que terminen los hilos del servidor
+	if (close_server() != 0) {
+		return 1;
 	}
 
 	fprintf(stdout, "Subsistemas de software del robot apagados correctamente en t(lamport) = %d\n",

@@ -16,7 +16,7 @@ void funcion_ready() {
 	strcpy(message.origin, "P3");
     message.action = READY_TO_SHUTDOWN;
 
-    send_message(message);
+    send_message(message, "P2");
 }
 
 void funcion_ack() {
@@ -25,11 +25,20 @@ void funcion_ack() {
 	strcpy(message.origin, "P3");
     message.action = SHUTDOWN_ACK;
 
-    send_message(message);
+    send_message(message, "P2");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
+	if (!check_arguments(argc, argv)) {
+		return 1;
+	}
+
 	strcpy(node_name, "P3");
+
+	// Conectar con el supervisor
+	if (createClient(argv[1], argv[2]) != 0) {
+		return 1;
+	}
 	
 	// Fase 1: mandar READY
 	while (get_clock_lamport() != VALUE_READY) {
